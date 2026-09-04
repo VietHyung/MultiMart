@@ -17,6 +17,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
+/**
+ * Lớp cấu hình bảo mật chính của toàn hệ thống (Spring Security 6).
+ * Thiết lập cơ chế Stateless Session, mã hóa BCrypt, phân quyền endpoint và chuỗi bộ lọc JWT.
+ */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
@@ -26,16 +30,40 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final CustomAuthenticationEntryPoint customAuthenticationEntryPoint;
 
+    /**
+     * Cung cấp Bean mã hóa mật khẩu theo chuẩn thuật toán BCrypt với độ muối (salt) tự sinh an toàn.
+     *
+     * @return đối tượng PasswordEncoder
+     */
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * Cung cấp Bean AuthenticationManager dùng để thực hiện xác thực thông tin đăng nhập trong AuthService.
+     *
+     * @param configuration cấu hình xác thực từ Spring Security
+     * @return đối tượng AuthenticationManager
+     * @throws Exception khi không khởi tạo được AuthenticationManager
+     */
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
         return configuration.getAuthenticationManager();
     }
 
+    /**
+     * Cấu hình chuỗi lọc bảo mật SecurityFilterChain:
+     * - Tắt CSRF (vì kiến trúc REST API Stateless dùng Token).
+     * - Kích hoạt CORS.
+     * - Không lưu trạng thái phiên đăng nhập vào Session trên RAM server (SessionCreationPolicy.STATELESS).
+     * - Phân định rõ các URL công khai (Auth, GET Products, GET FlashSale) và URL yêu cầu đăng nhập.
+     * - Chèn JwtAuthenticationFilter vào trước UsernamePasswordAuthenticationFilter.
+     *
+     * @param http đối tượng HttpSecurity để tùy biến bảo mật
+     * @return đối tượng SecurityFilterChain đã hoàn thiện
+     * @throws Exception lỗi cấu hình bảo mật
+     */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
@@ -51,7 +79,11 @@ public class SecurityConfig {
                                 "/api/v1/auth/refresh",
                                 "/h2-console/**"
                         ).permitAll()
-                        // Các endpoint còn lại (bao gồm /api/v1/auth/me) bắt buộc phải có JWT
+                        // Cho phép xem danh sách và chi tiết sản phẩm công khai
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/products/**").permitAll()
+                        // Cho phép xem các đợt Flash-Sale công khai
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/flash-sales/**").permitAll()
+                        // Các endpoint còn lại bắt buộc phải có JWT
                         .anyRequest().authenticated()
                 )
                 .headers(headers -> headers.frameOptions(HeadersConfigurer.FrameOptionsConfig::disable))

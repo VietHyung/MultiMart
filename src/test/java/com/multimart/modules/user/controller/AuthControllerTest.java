@@ -43,9 +43,11 @@ class AuthControllerTest {
     @Test
     @DisplayName("End-to-End: Đăng ký -> Đăng nhập lấy JWT -> Gọi API /me thành công")
     void testAuthFlow_Success() throws Exception {
+        String email = "trader_" + System.nanoTime() + "@gmail.com";
+
         // 1. Đăng ký tài khoản mới
         RegisterRequest registerReq = RegisterRequest.builder()
-                .email("trader_test@gmail.com")
+                .email(email)
                 .password("password123")
                 .fullName("Nguyen Van A")
                 .phone("0987654321")
@@ -56,12 +58,12 @@ class AuthControllerTest {
                         .content(objectMapper.writeValueAsString(registerReq)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code", is(1000)))
-                .andExpect(jsonPath("$.data.email", is("trader_test@gmail.com")))
+                .andExpect(jsonPath("$.data.email", is(email)))
                 .andExpect(jsonPath("$.data.fullName", is("Nguyen Van A")));
 
         // 2. Đăng nhập để nhận JWT Access Token
         LoginRequest loginReq = LoginRequest.builder()
-                .email("trader_test@gmail.com")
+                .email(email)
                 .password("password123")
                 .build();
 
@@ -85,7 +87,7 @@ class AuthControllerTest {
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code", is(1000)))
-                .andExpect(jsonPath("$.data.email", is("trader_test@gmail.com")));
+                .andExpect(jsonPath("$.data.email", is(email)));
 
         // 4. Gọi API /me KHÔNG kèm Token -> Bị chặn 401 Unauthorized
         mockMvc.perform(get("/api/v1/auth/me"))
@@ -96,8 +98,10 @@ class AuthControllerTest {
     @Test
     @DisplayName("Đăng ký trùng email -> Phải trả về lỗi 409 USER_EXISTED")
     void testRegister_DuplicateEmail_Fails() throws Exception {
+        String dupEmail = "dup_" + System.nanoTime() + "@gmail.com";
+
         RegisterRequest req1 = RegisterRequest.builder()
-                .email("duplicate@gmail.com")
+                .email(dupEmail)
                 .password("password123")
                 .fullName("User One")
                 .phone("0123456789")

@@ -6,17 +6,10 @@ spring:
     name: multimart-platform
 
   datasource:
-    # Cấu hình H2 Database in-memory để chạy test/dev ngay lập tức
-    url: jdbc:h2:mem:multimart_db;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password: 
-
-    # Khi có PostgreSQL, bạn chỉ cần thay đổi 4 dòng này:
-    # url: jdbc:postgresql://localhost:5432/multimart_db
-    # driver-class-name: org.postgresql.Driver
-    # username: postgres
-    # password: postgrespassword
+    url: jdbc:postgresql://localhost:5432/multimart_db
+    driver-class-name: org.postgresql.Driver
+    username: postgres
+    password: 123
 
   jpa:
     hibernate:
@@ -25,12 +18,8 @@ spring:
     properties:
       hibernate:
         format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
     open-in-view: false
-
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
 
 jwt:
   # Khóa bí mật HMAC-SHA256 (tối thiểu 256 bits)

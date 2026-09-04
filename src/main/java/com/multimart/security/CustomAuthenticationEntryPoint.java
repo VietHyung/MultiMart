@@ -11,9 +11,21 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.time.LocalDateTime;
 
+/**
+ * Xử lý các request truy cập vào API được bảo vệ nhưng chưa đăng nhập hoặc không có JWT Token hợp lệ.
+ * Trả về phản hồi lỗi HTTP 401 Unauthorized theo đúng định dạng JSON chuẩn của hệ thống.
+ */
 @Component
 public class CustomAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
+    /**
+     * Ghi đè phương thức commence để trả về JSON lỗi 401 Unauthorized kèm mã lỗi 2001 (UNAUTHENTICATED).
+     *
+     * @param request       HTTP request
+     * @param response      HTTP response
+     * @param authException ngoại lệ xác thực từ Spring Security
+     * @throws IOException lỗi vào/ra khi ghi dữ liệu phản hồi
+     */
     @Override
     public void commence(
             HttpServletRequest request,

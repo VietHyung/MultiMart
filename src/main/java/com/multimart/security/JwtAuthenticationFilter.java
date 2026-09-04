@@ -17,6 +17,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
+/**
+ * Filter chặn mọi HTTP request gửi đến server đúng 1 lần (OncePerRequestFilter)
+ * để kiểm tra xem request có mang theo JWT Bearer Token hợp lệ hay không.
+ */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -25,6 +29,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtTokenProvider jwtTokenProvider;
     private final CustomUserDetailsService userDetailsService;
 
+    /**
+     * Thực hiện logic lọc: trích xuất token, xác minh token, nạp thông tin user
+     * và thiết lập trạng thái xác thực vào SecurityContextHolder.
+     *
+     * @param request     HTTP request từ client
+     * @param response    HTTP response trả về client
+     * @param filterChain chuỗi các filter tiếp theo trong Spring Security
+     */
     @Override
     protected void doFilterInternal(
             @NonNull HttpServletRequest request,
@@ -54,6 +66,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    /**
+     * Bóc tách chuỗi token sạch ra khỏi header 'Authorization: Bearer <token>'.
+     *
+     * @param request HTTP request
+     * @return chuỗi token thuần túy nếu có tiền tố Bearer, ngược lại trả về null
+     */
     private String getJwtFromRequest(HttpServletRequest request) {
         String bearerToken = request.getHeader("Authorization");
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {

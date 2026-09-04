@@ -25,6 +25,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * Service xử lý toàn bộ logic nghiệp vụ về xác thực tài khoản:
+ * Đăng ký tài khoản, Đăng nhập và Lấy thông tin cá nhân của người dùng hiện tại.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -37,6 +41,16 @@ public class AuthService {
     private final JwtTokenProvider jwtTokenProvider;
     private final CustomUserDetailsService userDetailsService;
 
+    /**
+     * Xử lý đăng ký tài khoản người dùng mới:
+     * - Kiểm tra trùng lặp email.
+     * - Băm mật khẩu bằng BCrypt.
+     * - Gán vai trò mặc định là ROLE_USER.
+     * - Lưu thông tin người dùng vào cơ sở dữ liệu.
+     *
+     * @param request dữ liệu đăng ký gửi từ client
+     * @return UserResponse chứa thông tin tài khoản an toàn (không lộ mật khẩu)
+     */
     @Transactional
     public UserResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
@@ -62,6 +76,14 @@ public class AuthService {
         return mapToUserResponse(savedUser);
     }
 
+    /**
+     * Xử lý đăng nhập tài khoản:
+     * - Xác thực email và mật khẩu qua Spring Security AuthenticationManager.
+     * - Sinh cặp token: Access Token (15 phút) và Refresh Token (7 ngày).
+     *
+     * @param request thông tin email và mật khẩu đăng nhập
+     * @return AuthResponse chứa cặp token và thông tin người dùng
+     */
     public AuthResponse login(LoginRequest request) {
         try {
             authenticationManager.authenticate(
@@ -86,12 +108,24 @@ public class AuthService {
                 .build();
     }
 
+    /**
+     * Lấy thông tin chi tiết của người dùng đang đăng nhập dựa trên email.
+     *
+     * @param email địa chỉ email lấy từ SecurityContextHolder
+     * @return UserResponse chứa thông tin cá nhân và danh sách quyền
+     */
     public UserResponse getCurrentUser(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         return mapToUserResponse(user);
     }
 
+    /**
+     * Helper chuyển đổi đối tượng Entity User sang DTO UserResponse an toàn để trả về client.
+     *
+     * @param user đối tượng thực thể User
+     * @return DTO UserResponse
+     */
     private UserResponse mapToUserResponse(User user) {
         return UserResponse.builder()
                 .id(user.getId())
