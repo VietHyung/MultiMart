@@ -65,6 +65,9 @@ class FlashSaleControllerTest {
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
 
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.multimart.modules.flashsale.service.FlashSaleEngineService flashSaleEngineService;
+
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule());
 
@@ -208,5 +211,23 @@ class FlashSaleControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code", is(1000)))
                 .andExpect(jsonPath("$.data[0].remainingSeconds", greaterThan(0)));
+    }
+
+    @Test
+    @DisplayName("Admin làm nóng dữ liệu Flash Sale lên Redis Cache thành công -> Trả về 200 OK")
+    void testWarmUpEvent_Admin_Success() throws Exception {
+        org.mockito.Mockito.when(flashSaleEngineService.warmUpEvent(org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(com.multimart.modules.flashsale.dto.WarmUpEventResponse.builder()
+                        .eventId(1L)
+                        .eventName("Sale Test")
+                        .warmedUpProductsCount(2)
+                        .message("Warm-up thành công")
+                        .build());
+
+        mockMvc.perform(post("/api/v1/admin/flash-sales/1/warm-up")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code", is(1000)))
+                .andExpect(jsonPath("$.data.warmedUpProductsCount", is(2)));
     }
 }

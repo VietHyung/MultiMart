@@ -21,6 +21,12 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
     open-in-view: false
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2000ms
+
 jwt:
   # Khóa bí mật HMAC-SHA256 (tối thiểu 256 bits)
   secret: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970

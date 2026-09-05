@@ -25,7 +25,9 @@ public enum ErrorCode {
     OUT_OF_STOCK(3004, "Sản phẩm trong đợt Flash-Sale đã hết hàng", HttpStatus.BAD_REQUEST),
     PURCHASE_LIMIT_EXCEEDED(3005, "Bạn đã vượt quá giới hạn số lượng được mua trong đợt sale này", HttpStatus.BAD_REQUEST),
     ORDER_NOT_FOUND(3006, "Đơn hàng không tồn tại", HttpStatus.NOT_FOUND),
-    ORDER_EXPIRED(3007, "Đơn hàng đã hết hạn thanh toán", HttpStatus.BAD_REQUEST);
+    ORDER_EXPIRED(3007, "Đơn hàng đã hết hạn thanh toán", HttpStatus.BAD_REQUEST),
+    FLASH_SALE_NOT_WARMED_UP(3008, "Dữ liệu Flash Sale chưa được nạp lên Redis Cache (Warm-up)", HttpStatus.BAD_REQUEST),
+    FLASH_SALE_PRODUCT_NOT_FOUND(3009, "Sản phẩm Flash Sale không tồn tại trong sự kiện này", HttpStatus.NOT_FOUND);
 
     private final int code;
     private final String message;

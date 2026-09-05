@@ -5,6 +5,8 @@ import com.multimart.modules.flashsale.dto.AddProductToEventRequest;
 import com.multimart.modules.flashsale.dto.CreateEventRequest;
 import com.multimart.modules.flashsale.dto.FlashSaleEventResponse;
 import com.multimart.modules.flashsale.dto.FlashSaleProductResponse;
+import com.multimart.modules.flashsale.dto.WarmUpEventResponse;
+import com.multimart.modules.flashsale.service.FlashSaleEngineService;
 import com.multimart.modules.flashsale.service.FlashSaleService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +26,7 @@ import org.springframework.web.bind.annotation.*;
 public class AdminFlashSaleController {
 
     private final FlashSaleService flashSaleService;
+    private final FlashSaleEngineService flashSaleEngineService;
 
     /**
      * API Tạo đợt sự kiện Flash-Sale mới.
@@ -57,5 +60,20 @@ public class AdminFlashSaleController {
         FlashSaleProductResponse response = flashSaleService.addProductToEvent(id, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("Thêm sản phẩm vào Flash-Sale thành công", response));
+    }
+
+    /**
+     * API Nạp trước tồn kho sự kiện Flash Sale lên Redis Cache (Cache Warm-up).
+     * Yêu cầu quyền ROLE_ADMIN.
+     *
+     * @param id mã sự kiện Flash Sale
+     * @return HTTP 200 OK cùng thông tin kết quả warm-up
+     */
+    @PostMapping("/{id}/warm-up")
+    public ResponseEntity<ApiResponse<WarmUpEventResponse>> warmUpEvent(
+            @PathVariable Long id
+    ) {
+        WarmUpEventResponse response = flashSaleEngineService.warmUpEvent(id);
+        return ResponseEntity.ok(ApiResponse.success("Làm nóng dữ liệu Flash Sale thành công", response));
     }
 }
