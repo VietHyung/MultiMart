@@ -9,5 +9,19 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: multimart-rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"     # Cổng AMQP protocol
+      - "15672:15672"   # Management Web Dashboard
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
 volumes:
   redis_data:
+  rabbitmq_data:

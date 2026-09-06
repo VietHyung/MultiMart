@@ -42,4 +42,20 @@ public interface FlashSaleOrderRepository extends JpaRepository<FlashSaleOrder, 
      */
     List<FlashSaleOrder> findByUserIdAndFlashSaleEventIdAndFlashSaleProductId(
             Long userId, Long flashSaleEventId, Long flashSaleProductId);
+
+    /**
+     * Tìm kiếm đơn hàng Flash Sale theo mã theo dõi duy nhất (orderTrackingId).
+     *
+     * @param orderTrackingId Mã theo dõi UUID
+     * @return Optional chứa FlashSaleOrder nếu tìm thấy
+     */
+    java.util.Optional<FlashSaleOrder> findByOrderTrackingId(String orderTrackingId);
+
+    /**
+     * Kiểm tra xem đơn hàng với mã theo dõi này đã được xử lý vào DB hay chưa.
+     *
+     * @param orderTrackingId Mã theo dõi UUID
+     * @return true nếu đã tồn tại, ngược lại false
+     */
+    boolean existsByOrderTrackingId(String orderTrackingId);
 }

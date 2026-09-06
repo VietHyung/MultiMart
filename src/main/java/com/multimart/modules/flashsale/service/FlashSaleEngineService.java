@@ -3,13 +3,12 @@ package com.multimart.modules.flashsale.service;
 import com.multimart.common.exception.AppException;
 import com.multimart.common.exception.ErrorCode;
 import com.multimart.common.response.PageResponse;
-import com.multimart.modules.flashsale.dto.FlashSaleOrderRequest;
-import com.multimart.modules.flashsale.dto.FlashSaleOrderResponse;
-import com.multimart.modules.flashsale.dto.WarmUpEventResponse;
+import com.multimart.modules.flashsale.dto.*;
 import com.multimart.modules.flashsale.entity.FlashSaleEvent;
 import com.multimart.modules.flashsale.entity.FlashSaleOrder;
 import com.multimart.modules.flashsale.entity.FlashSaleOrderStatus;
 import com.multimart.modules.flashsale.entity.FlashSaleProduct;
+import com.multimart.modules.flashsale.mq.FlashSaleOrderProducer;
 import com.multimart.modules.flashsale.repository.FlashSaleEventRepository;
 import com.multimart.modules.flashsale.repository.FlashSaleOrderRepository;
 import com.multimart.modules.flashsale.repository.FlashSaleProductRepository;
@@ -39,6 +38,7 @@ public class FlashSaleEngineService {
     private final FlashSaleOrderRepository flashSaleOrderRepository;
     private final StringRedisTemplate stringRedisTemplate;
     private final DefaultRedisScript<Long> flashSaleStockDeductScript;
+    private final FlashSaleOrderProducer flashSaleOrderProducer;
 
     /**
      * Làm nóng dữ liệu (Cache Warm-up) sự kiện Flash Sale lên Redis trước giờ mở bán.
@@ -152,6 +152,140 @@ public class FlashSaleEngineService {
                 savedOrder.getId(), userId, luaResult);
 
         return mapToOrderResponse(savedOrder, request.getProductId());
+    }
+
+    /**
+     * Tiếp nhận yêu cầu đặt mua Flash Sale theo mô hình xử lý bất đồng bộ (Asynchronous Order Processing).
+     * 1. Trừ kho nguyên tử trên RAM với Redis Lua Script (< 2ms).
+     * 2. Sinh mã orderTrackingId (UUID).
+     * 3. Gửi message FlashSaleOrderMessage vào RabbitMQ Exchange để ghi đĩa ngầm.
+     * 4. Trả về ngay lập tức phản hồi cho Client (< 10ms) giải phóng kết nối.
+     *
+     * @param userId  ID người dùng đặt mua
+     * @param request DTO yêu cầu đặt mua
+     * @return DTO AsyncOrderSubmitResponse kèm mã theo dõi
+     */
+    public AsyncOrderSubmitResponse submitOrderAsync(Long userId, FlashSaleOrderRequest request) {
+        // 1. Kiểm tra sự kiện
+        FlashSaleEvent event = eventRepository.findById(request.getEventId())
+                .orElseThrow(() -> new AppException(ErrorCode.EVENT_NOT_FOUND));
+
+        LocalDateTime now = LocalDateTime.now();
+        if (now.isBefore(event.getStartTime()) || now.isAfter(event.getEndTime()) || !"ACTIVE".equalsIgnoreCase(event.getStatus())) {
+            throw new AppException(ErrorCode.EVENT_NOT_ACTIVE);
+        }
+
+        // 2. Tìm thông tin sản phẩm trong đợt sale
+        FlashSaleProduct flashSaleProduct = flashSaleProductRepository.findByEventIdAndProductId(
+                        request.getEventId(), request.getProductId())
+                .orElseThrow(() -> new AppException(ErrorCode.FLASH_SALE_PRODUCT_NOT_FOUND));
+
+        // 3. Thực thi trừ tồn kho nguyên tử qua Redis Lua Script
+        String stockKey = "flashsale:stock:" + request.getEventId() + ":" + request.getProductId();
+        String buyersKey = "flashsale:buyers:" + request.getEventId() + ":" + request.getProductId();
+
+        List<String> keys = List.of(stockKey, buyersKey);
+        Long luaResult = stringRedisTemplate.execute(
+                flashSaleStockDeductScript,
+                keys,
+                userId.toString(),
+                request.getQuantity().toString(),
+                flashSaleProduct.getPurchaseLimitPerUser().toString()
+        );
+
+        if (luaResult == null || luaResult == -3L) {
+            log.warn("Flash sale product not warmed up on Redis: eventId={}, productId={}", request.getEventId(), request.getProductId());
+            throw new AppException(ErrorCode.FLASH_SALE_NOT_WARMED_UP);
+        }
+
+        if (luaResult == -2L) {
+            log.warn("User {} exceeded purchase limit for flash sale product {}", userId, request.getProductId());
+            throw new AppException(ErrorCode.PURCHASE_LIMIT_EXCEEDED);
+        }
+
+        if (luaResult == -1L) {
+            log.warn("Flash sale product {} is out of stock in Redis", request.getProductId());
+            throw new AppException(ErrorCode.OUT_OF_STOCK);
+        }
+
+        // 4. Sinh mã tracking và gửi tin nhắn vào RabbitMQ
+        String orderTrackingId = java.util.UUID.randomUUID().toString();
+        BigDecimal unitPrice = flashSaleProduct.getFlashPrice();
+        BigDecimal totalPrice = unitPrice.multiply(BigDecimal.valueOf(request.getQuantity()));
+
+        FlashSaleOrderMessage orderMessage = FlashSaleOrderMessage.builder()
+                .orderTrackingId(orderTrackingId)
+                .userId(userId)
+                .eventId(request.getEventId())
+                .productId(request.getProductId())
+                .flashSaleProductId(flashSaleProduct.getId())
+                .quantity(request.getQuantity())
+                .unitPrice(unitPrice)
+                .totalPrice(totalPrice)
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        // Ghi nhận trạng thái PENDING_PROCESSING trên Redis
+        String trackingKey = "flashsale:order:tracking:" + orderTrackingId;
+        stringRedisTemplate.opsForValue().set(trackingKey, "PENDING_PROCESSING", 24, java.util.concurrent.TimeUnit.HOURS);
+
+        // Đẩy vào hàng đợi RabbitMQ
+        flashSaleOrderProducer.sendOrderMessage(orderMessage);
+
+        log.info("Flash sale order request accepted asynchronously: trackingId={}, userId={}, remainingStockInRedis={}",
+                orderTrackingId, userId, luaResult);
+
+        return AsyncOrderSubmitResponse.builder()
+                .orderTrackingId(orderTrackingId)
+                .status("PENDING_PROCESSING")
+                .eventId(request.getEventId())
+                .productId(request.getProductId())
+                .quantity(request.getQuantity())
+                .message("Yêu cầu đặt mua Flash Sale đã được tiếp nhận và đang xử lý")
+                .build();
+    }
+
+    /**
+     * Tra cứu trạng thái tiến trình xử lý đơn hàng bất đồng bộ dựa trên mã orderTrackingId.
+     *
+     * @param orderTrackingId Mã theo dõi UUID
+     * @return DTO OrderTrackingResponse chứa trạng thái hiện tại
+     */
+    @Transactional(readOnly = true)
+    public OrderTrackingResponse getTrackingStatus(String orderTrackingId) {
+        // Kiểm tra trong DB trước
+        java.util.Optional<FlashSaleOrder> orderOpt = flashSaleOrderRepository.findByOrderTrackingId(orderTrackingId);
+        if (orderOpt.isPresent()) {
+            FlashSaleOrder order = orderOpt.get();
+            FlashSaleProduct fsp = flashSaleProductRepository.findById(order.getFlashSaleProductId()).orElse(null);
+            Long productId = (fsp != null && fsp.getProduct() != null) ? fsp.getProduct().getId() : null;
+
+            return OrderTrackingResponse.builder()
+                    .orderTrackingId(orderTrackingId)
+                    .trackingStatus("SUCCESS")
+                    .orderId(order.getId())
+                    .userId(order.getUserId())
+                    .eventId(order.getFlashSaleEventId())
+                    .productId(productId)
+                    .quantity(order.getQuantity())
+                    .unitPrice(order.getUnitPrice())
+                    .totalPrice(order.getTotalPrice())
+                    .orderStatus(order.getStatus())
+                    .createdAt(order.getCreatedAt())
+                    .build();
+        }
+
+        // Nếu chưa có trong DB, kiểm tra cache Redis
+        String trackingKey = "flashsale:order:tracking:" + orderTrackingId;
+        String redisStatus = stringRedisTemplate.opsForValue().get(trackingKey);
+        if (redisStatus != null && redisStatus.startsWith("PENDING_PROCESSING")) {
+            return OrderTrackingResponse.builder()
+                    .orderTrackingId(orderTrackingId)
+                    .trackingStatus("PENDING_PROCESSING")
+                    .build();
+        }
+
+        throw new AppException(ErrorCode.RESOURCE_NOT_FOUND, "Không tìm thấy thông tin đơn hàng với mã theo dõi: " + orderTrackingId);
     }
 
     /**

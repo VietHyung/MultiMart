@@ -20,6 +20,12 @@ import java.math.BigDecimal;
 public class FlashSaleOrder extends BaseEntity {
 
     /**
+     * Mã theo dõi đơn hàng bất đồng bộ (UUID duy nhất) đảm bảo Idempotency.
+     */
+    @Column(name = "order_tracking_id", length = 64, unique = true)
+    private String orderTrackingId;
+
+    /**
      * ID của người dùng đặt mua.
      */
     @Column(name = "user_id", nullable = false)

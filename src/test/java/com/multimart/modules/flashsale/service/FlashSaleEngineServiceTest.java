@@ -7,6 +7,7 @@ import com.multimart.modules.flashsale.dto.FlashSaleOrderResponse;
 import com.multimart.modules.flashsale.dto.WarmUpEventResponse;
 import com.multimart.modules.flashsale.entity.FlashSaleEvent;
 import com.multimart.modules.flashsale.entity.FlashSaleOrder;
+import com.multimart.modules.flashsale.entity.FlashSaleOrderStatus;
 import com.multimart.modules.flashsale.entity.FlashSaleProduct;
 import com.multimart.modules.flashsale.repository.FlashSaleEventRepository;
 import com.multimart.modules.flashsale.repository.FlashSaleOrderRepository;
@@ -62,6 +63,9 @@ class FlashSaleEngineServiceTest {
 
     @Mock
     private DefaultRedisScript<Long> flashSaleStockDeductScript;
+
+    @Mock
+    private com.multimart.modules.flashsale.mq.FlashSaleOrderProducer flashSaleOrderProducer;
 
     @InjectMocks
     private FlashSaleEngineService engineService;
@@ -237,5 +241,85 @@ class FlashSaleEngineServiceTest {
         AppException ex = assertThrows(AppException.class, () -> engineService.placeOrder(1L, request));
         assertEquals(ErrorCode.EVENT_NOT_ACTIVE, ex.getErrorCode());
         verify(stringRedisTemplate, never()).execute(any(), anyList(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("Đặt mua bất đồng bộ thành công: Trừ kho Redis, gửi message vào RabbitMQ và trả về orderTrackingId")
+    void submitOrderAsync_Success() {
+        FlashSaleOrderRequest request = FlashSaleOrderRequest.builder()
+                .eventId(1L)
+                .productId(10L)
+                .quantity(1)
+                .build();
+
+        when(eventRepository.findById(1L)).thenReturn(Optional.of(activeEvent));
+        when(flashSaleProductRepository.findByEventIdAndProductId(1L, 10L)).thenReturn(Optional.of(flashSaleProduct));
+        when(stringRedisTemplate.execute(
+                eq(flashSaleStockDeductScript),
+                anyList(),
+                eq("1"),
+                eq("1"),
+                eq("2")
+        )).thenReturn(49L);
+
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+
+        com.multimart.modules.flashsale.dto.AsyncOrderSubmitResponse response = engineService.submitOrderAsync(1L, request);
+
+        assertNotNull(response);
+        assertNotNull(response.getOrderTrackingId());
+        assertEquals("PENDING_PROCESSING", response.getStatus());
+        assertEquals(1L, response.getEventId());
+        assertEquals(10L, response.getProductId());
+
+        verify(flashSaleOrderProducer, times(1)).sendOrderMessage(any());
+        verify(valueOperations, times(1)).set(
+                startsWith("flashsale:order:tracking:"),
+                eq("PENDING_PROCESSING"),
+                eq(24L),
+                eq(java.util.concurrent.TimeUnit.HOURS)
+        );
+    }
+
+    @Test
+    @DisplayName("Tra cứu trạng thái đơn hàng thành công từ Database")
+    void getTrackingStatus_FromDb_Success() {
+        String trackingId = "uuid-1234";
+        FlashSaleOrder mockOrder = FlashSaleOrder.builder()
+                .orderTrackingId(trackingId)
+                .userId(1L)
+                .flashSaleEventId(1L)
+                .flashSaleProductId(100L)
+                .quantity(1)
+                .unitPrice(BigDecimal.valueOf(500000))
+                .totalPrice(BigDecimal.valueOf(500000))
+                .status(FlashSaleOrderStatus.PENDING)
+                .build();
+        mockOrder.setId(101L);
+
+        when(flashSaleOrderRepository.findByOrderTrackingId(trackingId)).thenReturn(Optional.of(mockOrder));
+        when(flashSaleProductRepository.findById(100L)).thenReturn(Optional.of(flashSaleProduct));
+
+        com.multimart.modules.flashsale.dto.OrderTrackingResponse response = engineService.getTrackingStatus(trackingId);
+
+        assertNotNull(response);
+        assertEquals(trackingId, response.getOrderTrackingId());
+        assertEquals("SUCCESS", response.getTrackingStatus());
+        assertEquals(101L, response.getOrderId());
+    }
+
+    @Test
+    @DisplayName("Tra cứu trạng thái đơn hàng đang chờ xử lý từ Redis")
+    void getTrackingStatus_FromRedis_Pending() {
+        String trackingId = "uuid-5678";
+        when(flashSaleOrderRepository.findByOrderTrackingId(trackingId)).thenReturn(Optional.empty());
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("flashsale:order:tracking:" + trackingId)).thenReturn("PENDING_PROCESSING");
+
+        com.multimart.modules.flashsale.dto.OrderTrackingResponse response = engineService.getTrackingStatus(trackingId);
+
+        assertNotNull(response);
+        assertEquals(trackingId, response.getOrderTrackingId());
+        assertEquals("PENDING_PROCESSING", response.getTrackingStatus());
     }
 }

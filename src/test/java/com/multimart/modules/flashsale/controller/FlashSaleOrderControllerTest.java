@@ -78,9 +78,9 @@ class FlashSaleOrderControllerTest {
     }
 
     @Test
-    @DisplayName("Đặt mua Flash Sale thành công khi đã đăng nhập (Trả về 201 Created)")
+    @DisplayName("Đặt mua Flash Sale bất đồng bộ thành công khi đã đăng nhập (Trả về 202 Accepted)")
     @WithMockUser(username = "buyer@gmail.com", roles = {"USER"})
-    void placeOrder_Authenticated_Returns201() throws Exception {
+    void placeOrder_Authenticated_Returns202() throws Exception {
         FlashSaleOrderRequest request = FlashSaleOrderRequest.builder()
                 .eventId(1L)
                 .productId(10L)
@@ -94,28 +94,55 @@ class FlashSaleOrderControllerTest {
                 .build();
         mockUser.setId(5L);
 
-        FlashSaleOrderResponse mockResponse = FlashSaleOrderResponse.builder()
-                .orderId(101L)
-                .userId(5L)
-                .eventId(1L)
-                .productId(10L)
-                .quantity(1)
-                .unitPrice(BigDecimal.valueOf(499000))
-                .totalPrice(BigDecimal.valueOf(499000))
-                .status(FlashSaleOrderStatus.PENDING)
-                .createdAt(LocalDateTime.now())
-                .build();
+        com.multimart.modules.flashsale.dto.AsyncOrderSubmitResponse mockResponse =
+                com.multimart.modules.flashsale.dto.AsyncOrderSubmitResponse.builder()
+                        .orderTrackingId("tracking-uuid-1234")
+                        .status("PENDING_PROCESSING")
+                        .eventId(1L)
+                        .productId(10L)
+                        .quantity(1)
+                        .message("Yêu cầu đặt mua Flash Sale đã được tiếp nhận và đang xử lý")
+                        .build();
 
         when(userRepository.findByEmail("buyer@gmail.com")).thenReturn(Optional.of(mockUser));
-        when(flashSaleEngineService.placeOrder(eq(5L), any(FlashSaleOrderRequest.class))).thenReturn(mockResponse);
+        when(flashSaleEngineService.submitOrderAsync(eq(5L), any(FlashSaleOrderRequest.class))).thenReturn(mockResponse);
 
         mockMvc.perform(post("/api/v1/flash-sales/orders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isCreated())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.code").value(1000))
-                .andExpect(jsonPath("$.data.orderId").value(101))
-                .andExpect(jsonPath("$.data.status").value("PENDING"));
+                .andExpect(jsonPath("$.data.orderTrackingId").value("tracking-uuid-1234"))
+                .andExpect(jsonPath("$.data.status").value("PENDING_PROCESSING"));
+    }
+
+    @Test
+    @DisplayName("Tra cứu trạng thái đơn hàng bất đồng bộ thành công qua trackingId")
+    @WithMockUser(username = "buyer@gmail.com", roles = {"USER"})
+    void getTrackingStatus_Authenticated_Returns200() throws Exception {
+        String trackingId = "tracking-uuid-1234";
+        com.multimart.modules.flashsale.dto.OrderTrackingResponse mockResponse =
+                com.multimart.modules.flashsale.dto.OrderTrackingResponse.builder()
+                        .orderTrackingId(trackingId)
+                        .trackingStatus("SUCCESS")
+                        .orderId(101L)
+                        .userId(5L)
+                        .eventId(1L)
+                        .productId(10L)
+                        .quantity(1)
+                        .unitPrice(BigDecimal.valueOf(499000))
+                        .totalPrice(BigDecimal.valueOf(499000))
+                        .orderStatus(FlashSaleOrderStatus.PENDING)
+                        .createdAt(LocalDateTime.now())
+                        .build();
+
+        when(flashSaleEngineService.getTrackingStatus(trackingId)).thenReturn(mockResponse);
+
+        mockMvc.perform(get("/api/v1/flash-sales/orders/tracking/" + trackingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1000))
+                .andExpect(jsonPath("$.data.trackingStatus").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.orderId").value(101));
     }
 
     @Test

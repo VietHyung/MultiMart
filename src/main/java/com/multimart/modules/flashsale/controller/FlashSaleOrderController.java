@@ -4,8 +4,10 @@ import com.multimart.common.exception.AppException;
 import com.multimart.common.exception.ErrorCode;
 import com.multimart.common.response.ApiResponse;
 import com.multimart.common.response.PageResponse;
+import com.multimart.modules.flashsale.dto.AsyncOrderSubmitResponse;
 import com.multimart.modules.flashsale.dto.FlashSaleOrderRequest;
 import com.multimart.modules.flashsale.dto.FlashSaleOrderResponse;
+import com.multimart.modules.flashsale.dto.OrderTrackingResponse;
 import com.multimart.modules.flashsale.service.FlashSaleEngineService;
 import com.multimart.modules.user.entity.User;
 import com.multimart.modules.user.repository.UserRepository;
@@ -19,8 +21,8 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * Controller tiếp nhận yêu cầu đặt mua sản phẩm trong các đợt Flash Sale tốc độ cao.
- * Yêu cầu người dùng phải đăng nhập để xác định danh tính và giới hạn số lượt mua.
+ * Controller tiếp nhận yêu cầu đặt mua sản phẩm Flash Sale và tra cứu trạng thái đơn hàng.
+ * Áp dụng kiến trúc bất đồng bộ (RabbitMQ Decoupled Processing) để đạt hiệu năng tối đa.
  */
 @RestController
 @RequestMapping("/api/v1/flash-sales/orders")
@@ -31,16 +33,37 @@ public class FlashSaleOrderController {
     private final UserRepository userRepository;
 
     /**
-     * API Đặt mua sản phẩm Flash Sale với khả năng chịu tải hàng trăm nghìn RPS.
-     * Sử dụng Redis Lua Script trừ kho nguyên tử trong RAM trước khi lưu đơn hàng.
+     * API Đặt mua sản phẩm Flash Sale Bất đồng bộ (Async Queue Processing).
+     * Trừ kho trong RAM qua Redis Lua Script (< 2ms), đẩy tin nhắn vào RabbitMQ và trả về ngay mã theo dõi.
      *
      * @param request     Dữ liệu đặt mua (eventId, productId, quantity)
      * @param userDetails Thông tin tài khoản người dùng đăng nhập
-     * @return HTTP 201 Created cùng thông tin đơn hàng Flash Sale đã tạo
+     * @return HTTP 202 Accepted cùng mã theo dõi đơn hàng orderTrackingId
      */
     @PostMapping
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<ApiResponse<FlashSaleOrderResponse>> placeFlashSaleOrder(
+    public ResponseEntity<ApiResponse<AsyncOrderSubmitResponse>> placeFlashSaleOrderAsync(
+            @Valid @RequestBody FlashSaleOrderRequest request,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+
+        AsyncOrderSubmitResponse response = flashSaleEngineService.submitOrderAsync(user.getId(), request);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success("Yêu cầu đặt mua Flash-Sale đã được tiếp nhận và đang xử lý", response));
+    }
+
+    /**
+     * API Đặt mua sản phẩm Flash Sale Đồng bộ (Sync Direct DB Write - Fallback).
+     *
+     * @param request     Dữ liệu đặt mua
+     * @param userDetails Thông tin tài khoản người dùng đăng nhập
+     * @return HTTP 201 Created cùng thông tin đơn hàng đầy đủ
+     */
+    @PostMapping("/sync")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<FlashSaleOrderResponse>> placeFlashSaleOrderSync(
             @Valid @RequestBody FlashSaleOrderRequest request,
             @AuthenticationPrincipal UserDetails userDetails
     ) {
@@ -49,7 +72,23 @@ public class FlashSaleOrderController {
 
         FlashSaleOrderResponse response = flashSaleEngineService.placeOrder(user.getId(), request);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.success("Đặt mua sản phẩm Flash-Sale thành công", response));
+                .body(ApiResponse.success("Đặt mua sản phẩm Flash-Sale đồng bộ thành công", response));
+    }
+
+    /**
+     * API Tra cứu tiến trình xử lý đơn hàng bất đồng bộ dựa trên mã orderTrackingId.
+     * Cho phép Client thực hiện Polling để hiển thị trạng thái hoàn tất cho người dùng.
+     *
+     * @param trackingId Mã theo dõi UUID nhận được từ API đặt mua
+     * @return HTTP 200 OK cùng trạng thái chi tiết của đơn hàng
+     */
+    @GetMapping("/tracking/{trackingId}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<OrderTrackingResponse>> getOrderTrackingStatus(
+            @PathVariable String trackingId
+    ) {
+        OrderTrackingResponse response = flashSaleEngineService.getTrackingStatus(trackingId);
+        return ResponseEntity.ok(ApiResponse.success("Lấy trạng thái xử lý đơn hàng thành công", response));
     }
 
     /**
