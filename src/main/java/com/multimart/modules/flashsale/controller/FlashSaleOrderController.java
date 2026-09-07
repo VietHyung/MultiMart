@@ -112,4 +112,25 @@ public class FlashSaleOrderController {
         PageResponse<FlashSaleOrderResponse> response = flashSaleEngineService.getMyOrders(user.getId(), page, size);
         return ResponseEntity.ok(ApiResponse.success("Lấy lịch sử đơn hàng Flash-Sale thành công", response));
     }
+
+    /**
+     * API Thanh toán / Xác nhận đơn hàng Flash Sale trước khi hết hạn.
+     * Chuyển trạng thái đơn hàng sang CONFIRMED.
+     *
+     * @param id          ID đơn hàng cần thanh toán
+     * @param userDetails Thông tin tài khoản người dùng đăng nhập
+     * @return HTTP 200 OK cùng thông tin xác nhận thanh toán
+     */
+    @PostMapping("/{id}/pay")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<com.multimart.modules.flashsale.dto.FlashSaleOrderPaymentResponse>> payFlashSaleOrder(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+
+        com.multimart.modules.flashsale.dto.FlashSaleOrderPaymentResponse response = flashSaleEngineService.confirmPayment(user.getId(), id);
+        return ResponseEntity.ok(ApiResponse.success("Thanh toán đơn hàng Flash-Sale thành công", response));
+    }
 }

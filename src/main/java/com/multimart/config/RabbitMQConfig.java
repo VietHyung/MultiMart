@@ -27,6 +27,13 @@ public class RabbitMQConfig {
     public static final String DLQ_NAME = "flashsale.order.dlq";
     public static final String DLQ_ROUTING_KEY = "flashsale.order.dlq";
 
+    public static final String DELAY_QUEUE = "flashsale.order.delay.queue";
+    public static final String DELAY_ROUTING_KEY = "flashsale.order.delay";
+
+    public static final String CANCEL_EXCHANGE = "flashsale.order.cancel.exchange";
+    public static final String CANCEL_QUEUE = "flashsale.order.cancel.queue";
+    public static final String CANCEL_ROUTING_KEY = "flashsale.order.cancel";
+
     /**
      * Khởi tạo Direct Exchange chính xử lý đơn hàng Flash Sale.
      *
@@ -93,6 +100,64 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(flashSaleOrderDlq())
                 .to(flashSaleOrderDlx())
                 .with(DLQ_ROUTING_KEY);
+    }
+
+    /**
+     * Khởi tạo hàng đợi trì hoãn (Delay Queue) giữ tin nhắn hết hạn thanh toán (TTL).
+     * Khi hết hạn TTL, RabbitMQ sẽ tự động chuyển tiếp sang Cancel Exchange (DLX).
+     *
+     * @return Queue Delay với cấu hình DLX
+     */
+    @Bean
+    public Queue flashSaleOrderDelayQueue() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", CANCEL_EXCHANGE);
+        args.put("x-dead-letter-routing-key", CANCEL_ROUTING_KEY);
+        return new Queue(DELAY_QUEUE, true, false, false, args);
+    }
+
+    /**
+     * Khởi tạo Exchange tiếp nhận các đơn hàng Flash Sale quá hạn thanh toán từ Delay Queue.
+     *
+     * @return DirectExchange
+     */
+    @Bean
+    public DirectExchange flashSaleOrderCancelExchange() {
+        return new DirectExchange(CANCEL_EXCHANGE, true, false);
+    }
+
+    /**
+     * Khởi tạo hàng đợi tiếp nhận các yêu cầu hủy đơn và hoàn trả tồn kho.
+     *
+     * @return Queue Cancel
+     */
+    @Bean
+    public Queue flashSaleOrderCancelQueue() {
+        return new Queue(CANCEL_QUEUE, true, false, false);
+    }
+
+    /**
+     * Ràng buộc hàng đợi Delay Queue với Exchange chính theo routing key delay.
+     *
+     * @return Binding Delay Queue
+     */
+    @Bean
+    public Binding bindingDelayQueue() {
+        return BindingBuilder.bind(flashSaleOrderDelayQueue())
+                .to(flashSaleOrderExchange())
+                .with(DELAY_ROUTING_KEY);
+    }
+
+    /**
+     * Ràng buộc hàng đợi Cancel Queue với Cancel Exchange.
+     *
+     * @return Binding Cancel Queue
+     */
+    @Bean
+    public Binding bindingCancelQueue() {
+        return BindingBuilder.bind(flashSaleOrderCancelQueue())
+                .to(flashSaleOrderCancelExchange())
+                .with(CANCEL_ROUTING_KEY);
     }
 
     /**

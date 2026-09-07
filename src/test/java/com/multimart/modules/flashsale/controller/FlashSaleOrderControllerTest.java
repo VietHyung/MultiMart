@@ -204,4 +204,60 @@ class FlashSaleOrderControllerTest {
                 .andExpect(jsonPath("$.code").value(1000))
                 .andExpect(jsonPath("$.data.content[0].orderId").value(101));
     }
+
+    @Test
+    @DisplayName("Thanh toán đơn hàng Flash Sale thành công: Trả về HTTP 200 OK cùng trạng thái CONFIRMED")
+    @WithMockUser(username = "buyer@gmail.com", roles = "CUSTOMER")
+    void payOrder_Success_Returns200() throws Exception {
+        User mockUser = User.builder()
+                .email("buyer@gmail.com")
+                .fullName("Buyer")
+                .build();
+        mockUser.setId(5L);
+
+        com.multimart.modules.flashsale.dto.FlashSaleOrderPaymentResponse paymentResponse =
+                com.multimart.modules.flashsale.dto.FlashSaleOrderPaymentResponse.builder()
+                        .orderId(101L)
+                        .orderTrackingId("tracking-uuid-pay-1")
+                        .status(FlashSaleOrderStatus.CONFIRMED)
+                        .totalPrice(BigDecimal.valueOf(499000))
+                        .paidAt(LocalDateTime.now())
+                        .message("Thanh toán đơn hàng Flash Sale thành công")
+                        .build();
+
+        when(userRepository.findByEmail("buyer@gmail.com")).thenReturn(Optional.of(mockUser));
+        when(flashSaleEngineService.confirmPayment(5L, 101L)).thenReturn(paymentResponse);
+
+        mockMvc.perform(post("/api/v1/flash-sales/orders/101/pay"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1000))
+                .andExpect(jsonPath("$.data.orderId").value(101))
+                .andExpect(jsonPath("$.data.status").value("CONFIRMED"));
+    }
+
+    @Test
+    @DisplayName("Từ chối thanh toán đơn hàng với HTTP 401 khi chưa đăng nhập")
+    void payOrder_Unauthenticated_Returns401() throws Exception {
+        mockMvc.perform(post("/api/v1/flash-sales/orders/101/pay"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("Thanh toán đơn hàng thất bại với HTTP 400 khi đơn hàng đã hết hạn hoặc bị hủy")
+    @WithMockUser(username = "buyer@gmail.com", roles = "CUSTOMER")
+    void payOrder_OrderAlreadyCancelled_Returns400() throws Exception {
+        User mockUser = User.builder()
+                .email("buyer@gmail.com")
+                .fullName("Buyer")
+                .build();
+        mockUser.setId(5L);
+
+        when(userRepository.findByEmail("buyer@gmail.com")).thenReturn(Optional.of(mockUser));
+        when(flashSaleEngineService.confirmPayment(5L, 101L))
+                .thenThrow(new com.multimart.common.exception.AppException(com.multimart.common.exception.ErrorCode.ORDER_ALREADY_CANCELLED));
+
+        mockMvc.perform(post("/api/v1/flash-sales/orders/101/pay"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(3010));
+    }
 }

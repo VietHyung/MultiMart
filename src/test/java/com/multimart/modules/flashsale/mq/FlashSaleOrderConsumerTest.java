@@ -43,6 +43,9 @@ class FlashSaleOrderConsumerTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
+    @Mock
+    private FlashSaleOrderProducer flashSaleOrderProducer;
+
     @InjectMocks
     private FlashSaleOrderConsumer consumer;
 
@@ -122,5 +125,6 @@ class FlashSaleOrderConsumerTest {
                 eq(24L),
                 eq(TimeUnit.HOURS)
         );
+        verify(flashSaleOrderProducer, times(1)).sendOrderTimeoutMessage(any(), anyLong());
     }
 }

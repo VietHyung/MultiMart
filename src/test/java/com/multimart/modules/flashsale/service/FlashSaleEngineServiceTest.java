@@ -4,6 +4,7 @@ import com.multimart.common.exception.AppException;
 import com.multimart.common.exception.ErrorCode;
 import com.multimart.modules.flashsale.dto.FlashSaleOrderRequest;
 import com.multimart.modules.flashsale.dto.FlashSaleOrderResponse;
+import com.multimart.modules.flashsale.dto.FlashSaleOrderTimeoutMessage;
 import com.multimart.modules.flashsale.dto.WarmUpEventResponse;
 import com.multimart.modules.flashsale.entity.FlashSaleEvent;
 import com.multimart.modules.flashsale.entity.FlashSaleOrder;
@@ -28,6 +29,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -65,9 +67,11 @@ class FlashSaleEngineServiceTest {
     private DefaultRedisScript<Long> flashSaleStockDeductScript;
 
     @Mock
+    private DefaultRedisScript<Long> flashSaleStockRollbackScript;
+
+    @Mock
     private com.multimart.modules.flashsale.mq.FlashSaleOrderProducer flashSaleOrderProducer;
 
-    @InjectMocks
     private FlashSaleEngineService engineService;
 
     private FlashSaleEvent activeEvent;
@@ -101,6 +105,16 @@ class FlashSaleEngineServiceTest {
                 .version(0L)
                 .build();
         flashSaleProduct.setId(100L);
+
+        engineService = new FlashSaleEngineService(
+                eventRepository,
+                flashSaleProductRepository,
+                flashSaleOrderRepository,
+                stringRedisTemplate,
+                flashSaleStockDeductScript,
+                flashSaleStockRollbackScript,
+                flashSaleOrderProducer
+        );
     }
 
     @Test
@@ -321,5 +335,177 @@ class FlashSaleEngineServiceTest {
         assertNotNull(response);
         assertEquals(trackingId, response.getOrderTrackingId());
         assertEquals("PENDING_PROCESSING", response.getTrackingStatus());
+    }
+
+    @Test
+    @DisplayName("Thanh toán đơn hàng thành công: Chuyển trạng thái sang CONFIRMED và cập nhật cache")
+    void confirmPayment_Success() {
+        Long orderId = 200L;
+        Long userId = 1L;
+        FlashSaleOrder mockOrder = FlashSaleOrder.builder()
+                .userId(userId)
+                .flashSaleEventId(1L)
+                .flashSaleProductId(100L)
+                .quantity(1)
+                .unitPrice(BigDecimal.valueOf(100000))
+                .totalPrice(BigDecimal.valueOf(100000))
+                .orderTrackingId("tracking-200")
+                .status(FlashSaleOrderStatus.PENDING)
+                .build();
+        mockOrder.setId(orderId);
+
+        when(flashSaleOrderRepository.findById(orderId)).thenReturn(Optional.of(mockOrder));
+        when(flashSaleOrderRepository.save(any(FlashSaleOrder.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+
+        com.multimart.modules.flashsale.dto.FlashSaleOrderPaymentResponse response = engineService.confirmPayment(userId, orderId);
+
+        assertNotNull(response);
+        assertEquals(orderId, response.getOrderId());
+        assertEquals(FlashSaleOrderStatus.CONFIRMED, response.getStatus());
+        verify(flashSaleOrderRepository, times(1)).save(mockOrder);
+        verify(valueOperations, times(1)).set(
+                eq("flashsale:order:tracking:tracking-200"),
+                eq("CONFIRMED:200"),
+                eq(24L),
+                eq(TimeUnit.HOURS)
+        );
+    }
+
+    @Test
+    @DisplayName("Thanh toán đơn hàng thất bại khi không tìm thấy đơn hàng")
+    void confirmPayment_OrderNotFound_ThrowsException() {
+        when(flashSaleOrderRepository.findById(999L)).thenReturn(Optional.empty());
+
+        AppException exception = assertThrows(AppException.class, () -> engineService.confirmPayment(1L, 999L));
+        assertEquals(ErrorCode.ORDER_NOT_FOUND, exception.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Thanh toán đơn hàng thất bại khi người dùng không sở hữu đơn hàng (IDOR check)")
+    void confirmPayment_AccessDenied_ThrowsException() {
+        FlashSaleOrder mockOrder = FlashSaleOrder.builder()
+                .userId(2L) // sở hữu bởi user 2
+                .status(FlashSaleOrderStatus.PENDING)
+                .build();
+        mockOrder.setId(201L);
+
+        when(flashSaleOrderRepository.findById(201L)).thenReturn(Optional.of(mockOrder));
+
+        // User 1 cố tình thanh toán đơn của User 2
+        AppException exception = assertThrows(AppException.class, () -> engineService.confirmPayment(1L, 201L));
+        assertEquals(ErrorCode.ORDER_ACCESS_DENIED, exception.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Thanh toán đơn hàng thất bại khi đơn hàng đã bị hủy (CANCELLED)")
+    void confirmPayment_AlreadyCancelled_ThrowsException() {
+        FlashSaleOrder mockOrder = FlashSaleOrder.builder()
+                .userId(1L)
+                .status(FlashSaleOrderStatus.CANCELLED)
+                .build();
+        mockOrder.setId(202L);
+
+        when(flashSaleOrderRepository.findById(202L)).thenReturn(Optional.of(mockOrder));
+
+        AppException exception = assertThrows(AppException.class, () -> engineService.confirmPayment(1L, 202L));
+        assertEquals(ErrorCode.ORDER_ALREADY_CANCELLED, exception.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Thanh toán đơn hàng thất bại khi đơn hàng đã được thanh toán trước đó (CONFIRMED)")
+    void confirmPayment_AlreadyPaid_ThrowsException() {
+        FlashSaleOrder mockOrder = FlashSaleOrder.builder()
+                .userId(1L)
+                .status(FlashSaleOrderStatus.CONFIRMED)
+                .build();
+        mockOrder.setId(203L);
+
+        when(flashSaleOrderRepository.findById(203L)).thenReturn(Optional.of(mockOrder));
+
+        AppException exception = assertThrows(AppException.class, () -> engineService.confirmPayment(1L, 203L));
+        assertEquals(ErrorCode.ORDER_ALREADY_PAID, exception.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Hủy đơn quá hạn thành công: Cập nhật CANCELLED, tăng tồn kho DB và chạy Redis Lua rollback")
+    void rollbackOrderStock_PendingOrder_Success() {
+        FlashSaleOrder mockOrder = FlashSaleOrder.builder()
+                .userId(1L)
+                .flashSaleEventId(10L)
+                .flashSaleProductId(100L)
+                .quantity(2)
+                .orderTrackingId("tracking-timeout-1")
+                .status(FlashSaleOrderStatus.PENDING)
+                .build();
+        mockOrder.setId(300L);
+
+        FlashSaleOrderTimeoutMessage message = FlashSaleOrderTimeoutMessage.builder()
+                        .orderId(300L)
+                        .orderTrackingId("tracking-timeout-1")
+                        .userId(1L)
+                        .eventId(10L)
+                        .productId(50L)
+                        .flashSaleProductId(100L)
+                        .quantity(2)
+                        .createdAt(LocalDateTime.now())
+                        .build();
+
+        when(flashSaleOrderRepository.findById(300L)).thenReturn(Optional.of(mockOrder));
+        when(flashSaleProductRepository.findById(100L)).thenReturn(Optional.of(flashSaleProduct));
+        when(stringRedisTemplate.execute(eq(flashSaleStockRollbackScript), anyList(), eq("1"), eq("2"))).thenReturn(10L);
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+
+        int stockBefore = flashSaleProduct.getAvailableStock();
+        boolean result = engineService.rollbackOrderStock(message);
+
+        assertTrue(result);
+        assertEquals(FlashSaleOrderStatus.CANCELLED, mockOrder.getStatus());
+        assertEquals(stockBefore + 2, flashSaleProduct.getAvailableStock());
+        verify(flashSaleOrderRepository, times(1)).save(mockOrder);
+        verify(flashSaleProductRepository, times(1)).save(flashSaleProduct);
+        verify(valueOperations, times(1)).set(
+                eq("flashsale:order:tracking:tracking-timeout-1"),
+                eq("CANCELLED_TIMEOUT"),
+                eq(24L),
+                eq(TimeUnit.HOURS)
+        );
+    }
+
+    @Test
+    @DisplayName("Bỏ qua không hủy đơn khi đơn hàng đã thanh toán (CONFIRMED)")
+    void rollbackOrderStock_ConfirmedOrder_Skipped() {
+        FlashSaleOrder mockOrder = FlashSaleOrder.builder()
+                .userId(1L)
+                .status(FlashSaleOrderStatus.CONFIRMED)
+                .build();
+        mockOrder.setId(301L);
+
+        FlashSaleOrderTimeoutMessage message = FlashSaleOrderTimeoutMessage.builder()
+                        .orderId(301L)
+                        .build();
+
+        when(flashSaleOrderRepository.findById(301L)).thenReturn(Optional.of(mockOrder));
+
+        boolean result = engineService.rollbackOrderStock(message);
+
+        assertFalse(result);
+        verify(flashSaleOrderRepository, never()).save(any());
+        verify(flashSaleProductRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("Bỏ qua khi không tìm thấy đơn hàng")
+    void rollbackOrderStock_OrderNotFound_Skipped() {
+        FlashSaleOrderTimeoutMessage message = FlashSaleOrderTimeoutMessage.builder()
+                        .orderId(999L)
+                        .build();
+
+        when(flashSaleOrderRepository.findById(999L)).thenReturn(Optional.empty());
+
+        boolean result = engineService.rollbackOrderStock(message);
+
+        assertFalse(result);
+        verify(flashSaleOrderRepository, never()).save(any());
     }
 }

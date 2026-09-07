@@ -27,7 +27,10 @@ public enum ErrorCode {
     ORDER_NOT_FOUND(3006, "Đơn hàng không tồn tại", HttpStatus.NOT_FOUND),
     ORDER_EXPIRED(3007, "Đơn hàng đã hết hạn thanh toán", HttpStatus.BAD_REQUEST),
     FLASH_SALE_NOT_WARMED_UP(3008, "Dữ liệu Flash Sale chưa được nạp lên Redis Cache (Warm-up)", HttpStatus.BAD_REQUEST),
-    FLASH_SALE_PRODUCT_NOT_FOUND(3009, "Sản phẩm Flash Sale không tồn tại trong sự kiện này", HttpStatus.NOT_FOUND);
+    FLASH_SALE_PRODUCT_NOT_FOUND(3009, "Sản phẩm Flash Sale không tồn tại trong sự kiện này", HttpStatus.NOT_FOUND),
+    ORDER_ALREADY_CANCELLED(3010, "Đơn hàng đã hết hạn thanh toán hoặc đã bị hủy", HttpStatus.BAD_REQUEST),
+    ORDER_ALREADY_PAID(3011, "Đơn hàng đã được thanh toán trước đó", HttpStatus.BAD_REQUEST),
+    ORDER_ACCESS_DENIED(3012, "Bạn không có quyền thao tác trên đơn hàng này", HttpStatus.FORBIDDEN);
 
     private final int code;
     private final String message;

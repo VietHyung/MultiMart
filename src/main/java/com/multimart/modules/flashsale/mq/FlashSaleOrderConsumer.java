@@ -16,6 +16,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.concurrent.TimeUnit;
 
+import com.multimart.modules.flashsale.dto.FlashSaleOrderTimeoutMessage;
+import org.springframework.beans.factory.annotation.Value;
+import java.time.LocalDateTime;
+
 /**
  * Consumer tiêu thụ tin nhắn từ RabbitMQ để ghi nhận đơn hàng và trừ kho Database một cách bất đồng bộ.
  * Đảm bảo tính Idempotency (chống xử lý trùng tin nhắn) dựa trên orderTrackingId.
@@ -28,6 +32,10 @@ public class FlashSaleOrderConsumer {
     private final FlashSaleOrderRepository flashSaleOrderRepository;
     private final FlashSaleProductRepository flashSaleProductRepository;
     private final StringRedisTemplate stringRedisTemplate;
+    private final FlashSaleOrderProducer flashSaleOrderProducer;
+
+    @Value("${flashsale.order.timeout-ms:900000}")
+    private long orderTimeoutMs;
 
     /**
      * Lắng nghe và tiêu thụ message từ hàng đợi flashsale.order.queue.
@@ -75,6 +83,21 @@ public class FlashSaleOrderConsumer {
 
             log.info("Successfully processed and saved flash sale order: orderId={}, trackingId={}",
                     savedOrder.getId(), message.getOrderTrackingId());
+
+            // 5. Gửi message hẹn giờ hủy đơn hàng vào Delay Queue (TTL expiration)
+            FlashSaleOrderTimeoutMessage timeoutMessage = FlashSaleOrderTimeoutMessage.builder()
+                    .orderId(savedOrder.getId())
+                    .orderTrackingId(savedOrder.getOrderTrackingId())
+                    .userId(savedOrder.getUserId())
+                    .eventId(savedOrder.getFlashSaleEventId())
+                    .productId(message.getProductId())
+                    .flashSaleProductId(savedOrder.getFlashSaleProductId())
+                    .quantity(savedOrder.getQuantity())
+                    .createdAt(LocalDateTime.now())
+                    .build();
+
+            flashSaleOrderProducer.sendOrderTimeoutMessage(timeoutMessage, orderTimeoutMs);
+            log.info("Sent timeout message to delay queue: orderId={}, ttlMs={}", savedOrder.getId(), orderTimeoutMs);
 
         } catch (Exception e) {
             log.error("Failed to process flash sale order message: trackingId={}, error={}",

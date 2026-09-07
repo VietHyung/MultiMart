@@ -4,6 +4,7 @@ import com.multimart.common.exception.AppException;
 import com.multimart.common.exception.ErrorCode;
 import com.multimart.common.response.PageResponse;
 import com.multimart.modules.flashsale.dto.*;
+import com.multimart.modules.flashsale.dto.FlashSaleOrderTimeoutMessage;
 import com.multimart.modules.flashsale.entity.FlashSaleEvent;
 import com.multimart.modules.flashsale.entity.FlashSaleOrder;
 import com.multimart.modules.flashsale.entity.FlashSaleOrderStatus;
@@ -38,6 +39,7 @@ public class FlashSaleEngineService {
     private final FlashSaleOrderRepository flashSaleOrderRepository;
     private final StringRedisTemplate stringRedisTemplate;
     private final DefaultRedisScript<Long> flashSaleStockDeductScript;
+    private final DefaultRedisScript<Long> flashSaleStockRollbackScript;
     private final FlashSaleOrderProducer flashSaleOrderProducer;
 
     /**
@@ -340,5 +342,107 @@ public class FlashSaleEngineService {
                 .status(order.getStatus())
                 .createdAt(order.getCreatedAt() != null ? order.getCreatedAt() : LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * Xác nhận thanh toán đơn hàng Flash Sale trước khi hết hạn.
+     * Chuyển trạng thái đơn hàng từ PENDING sang CONFIRMED.
+     *
+     * @param userId  ID người dùng thực hiện thanh toán
+     * @param orderId ID đơn hàng cần thanh toán
+     * @return DTO FlashSaleOrderPaymentResponse xác nhận thanh toán thành công
+     */
+    @Transactional
+    public FlashSaleOrderPaymentResponse confirmPayment(Long userId, Long orderId) {
+        FlashSaleOrder order = flashSaleOrderRepository.findById(orderId)
+                .orElseThrow(() -> new AppException(ErrorCode.ORDER_NOT_FOUND));
+
+        // Kiểm tra quyền sở hữu đơn hàng
+        if (!order.getUserId().equals(userId)) {
+            throw new AppException(ErrorCode.ORDER_ACCESS_DENIED);
+        }
+
+        // Kiểm tra trạng thái đơn hàng
+        if (order.getStatus() == FlashSaleOrderStatus.CANCELLED) {
+            throw new AppException(ErrorCode.ORDER_ALREADY_CANCELLED);
+        }
+
+        if (order.getStatus() == FlashSaleOrderStatus.CONFIRMED) {
+            throw new AppException(ErrorCode.ORDER_ALREADY_PAID);
+        }
+
+        // Cập nhật trạng thái sang CONFIRMED
+        order.setStatus(FlashSaleOrderStatus.CONFIRMED);
+        FlashSaleOrder updatedOrder = flashSaleOrderRepository.save(order);
+
+        // Cập nhật cache trạng thái trên Redis
+        String trackingKey = "flashsale:order:tracking:" + order.getOrderTrackingId();
+        stringRedisTemplate.opsForValue().set(trackingKey, "CONFIRMED:" + order.getId(), 24, java.util.concurrent.TimeUnit.HOURS);
+
+        log.info("Flash sale order payment confirmed successfully: orderId={}, userId={}", orderId, userId);
+
+        return FlashSaleOrderPaymentResponse.builder()
+                .orderId(updatedOrder.getId())
+                .orderTrackingId(updatedOrder.getOrderTrackingId())
+                .status(updatedOrder.getStatus())
+                .totalPrice(updatedOrder.getTotalPrice())
+                .paidAt(LocalDateTime.now())
+                .message("Thanh toán đơn hàng Flash Sale thành công")
+                .build();
+    }
+
+    /**
+     * Thực hiện hủy đơn hàng quá hạn và hoàn trả tồn kho trên cả Database lẫn Redis.
+     * Được gọi bởi Consumer lắng nghe Dead Letter Queue (flashsale.order.cancel.queue).
+     *
+     * @param message DTO chứa thông tin đơn hàng cần kiểm tra và hủy
+     * @return true nếu đơn hàng được hủy và hoàn kho thành công, false nếu đơn đã thanh toán hoặc không tồn tại
+     */
+    @Transactional
+    public boolean rollbackOrderStock(FlashSaleOrderTimeoutMessage message) {
+        FlashSaleOrder order = flashSaleOrderRepository.findById(message.getOrderId()).orElse(null);
+        if (order == null) {
+            log.warn("Order not found for timeout cancellation: orderId={}", message.getOrderId());
+            return false;
+        }
+
+        // Chỉ hủy khi đơn hàng vẫn ở trạng thái PENDING
+        if (order.getStatus() != FlashSaleOrderStatus.PENDING) {
+            log.info("Order {} is not PENDING (current status: {}), skipping cancellation and rollback",
+                    order.getId(), order.getStatus());
+            return false;
+        }
+
+        // 1. Chuyển trạng thái đơn hàng thành CANCELLED
+        order.setStatus(FlashSaleOrderStatus.CANCELLED);
+        flashSaleOrderRepository.save(order);
+
+        // 2. Hoàn trả tồn kho DB
+        flashSaleProductRepository.findById(message.getFlashSaleProductId()).ifPresent(fsp -> {
+            fsp.setAvailableStock(fsp.getAvailableStock() + message.getQuantity());
+            flashSaleProductRepository.save(fsp);
+            log.info("Restored DB available stock for flashSaleProductId {}: +{}", fsp.getId(), message.getQuantity());
+        });
+
+        // 3. Hoàn trả tồn kho và hạn mức mua trên Redis qua Lua script
+        String stockKey = "flashsale:stock:" + message.getEventId() + ":" + message.getProductId();
+        String buyersKey = "flashsale:buyers:" + message.getEventId() + ":" + message.getProductId();
+        List<String> keys = List.of(stockKey, buyersKey);
+
+        Long updatedStock = stringRedisTemplate.execute(
+                flashSaleStockRollbackScript,
+                keys,
+                message.getUserId().toString(),
+                message.getQuantity().toString()
+        );
+
+        // 4. Cập nhật cache trạng thái đơn hàng trên Redis
+        String trackingKey = "flashsale:order:tracking:" + message.getOrderTrackingId();
+        stringRedisTemplate.opsForValue().set(trackingKey, "CANCELLED_TIMEOUT", 24, java.util.concurrent.TimeUnit.HOURS);
+
+        log.info("Successfully cancelled expired flash sale order: orderId={}, trackingId={}, remainingStockInRedis={}",
+                order.getId(), message.getOrderTrackingId(), updatedStock);
+
+        return true;
     }
 }

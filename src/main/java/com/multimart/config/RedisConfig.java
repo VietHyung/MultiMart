@@ -66,4 +66,17 @@ public class RedisConfig {
         script.setResultType(Long.class);
         return script;
     }
+
+    /**
+     * Nạp mã Redis Lua Script để thực hiện thao tác hoàn trả tồn kho và hạn mức mua nguyên tử (Rollback).
+     *
+     * @return Đối tượng DefaultRedisScript chứa mã Lua script và kiểu trả về Long
+     */
+    @Bean
+    public DefaultRedisScript<Long> flashSaleStockRollbackScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("scripts/flash_sale_stock_rollback.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
 }
