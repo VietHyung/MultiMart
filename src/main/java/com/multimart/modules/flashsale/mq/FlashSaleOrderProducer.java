@@ -18,21 +18,37 @@ import org.springframework.stereotype.Component;
 public class FlashSaleOrderProducer {
 
     private final RabbitTemplate rabbitTemplate;
+    private final org.springframework.beans.factory.ObjectProvider<FlashSaleOrderConsumer> consumerProvider;
 
     /**
      * Gửi message yêu cầu tạo đơn hàng vào Exchange của RabbitMQ.
+     * Tự động chuyển tiếp xử lý bất đồng bộ qua Background Worker nếu RabbitMQ chưa kích hoạt.
      *
      * @param message DTO chứa toàn bộ thông tin đơn hàng Flash Sale cần tạo
      */
     public void sendOrderMessage(FlashSaleOrderMessage message) {
-        log.info("Sending flash sale order message to RabbitMQ: trackingId={}, userId={}, eventId={}, productId={}",
+        log.info("Sending flash sale order message: trackingId={}, userId={}, eventId={}, productId={}",
                 message.getOrderTrackingId(), message.getUserId(), message.getEventId(), message.getProductId());
 
-        rabbitTemplate.convertAndSend(
-                RabbitMQConfig.EXCHANGE_NAME,
-                RabbitMQConfig.ORDER_ROUTING_KEY,
-                message
-        );
+        try {
+            rabbitTemplate.convertAndSend(
+                    RabbitMQConfig.EXCHANGE_NAME,
+                    RabbitMQConfig.ORDER_ROUTING_KEY,
+                    message
+            );
+        } catch (Exception e) {
+            log.warn("RabbitMQ unavailable, dispatching asynchronously via background worker thread: {}", e.getMessage());
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    FlashSaleOrderConsumer consumer = consumerProvider.getIfAvailable();
+                    if (consumer != null) {
+                        consumer.processOrderMessage(message);
+                    }
+                } catch (Exception ex) {
+                    log.error("Async worker failed to process order: {}", ex.getMessage(), ex);
+                }
+            });
+        }
     }
 
     /**
@@ -46,14 +62,18 @@ public class FlashSaleOrderProducer {
         log.info("Sending order timeout message to delay queue: orderId={}, trackingId={}, delayMs={}",
                 message.getOrderId(), message.getOrderTrackingId(), delayMs);
 
-        rabbitTemplate.convertAndSend(
-                RabbitMQConfig.EXCHANGE_NAME,
-                RabbitMQConfig.DELAY_ROUTING_KEY,
-                message,
-                msg -> {
-                    msg.getMessageProperties().setExpiration(String.valueOf(delayMs));
-                    return msg;
-                }
-        );
+        try {
+            rabbitTemplate.convertAndSend(
+                    RabbitMQConfig.EXCHANGE_NAME,
+                    RabbitMQConfig.DELAY_ROUTING_KEY,
+                    message,
+                    msg -> {
+                        msg.getMessageProperties().setExpiration(String.valueOf(delayMs));
+                        return msg;
+                    }
+            );
+        } catch (Exception e) {
+            log.warn("RabbitMQ delay queue unavailable: {}", e.getMessage());
+        }
     }
 }
