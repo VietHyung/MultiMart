@@ -143,7 +143,12 @@ public class FlashSaleService {
         }
 
         return events.stream()
-                .map(this::mapToEventResponse)
+                .map(event -> {
+                    FlashSaleEventResponse response = mapToEventResponse(event);
+                    List<FlashSaleProduct> products = flashSaleProductRepository.findByEventId(event.getId());
+                    response.setProducts(products.stream().map(this::mapToProductResponse).collect(Collectors.toList()));
+                    return response;
+                })
                 .collect(Collectors.toList());
     }
 
