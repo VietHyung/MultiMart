@@ -83,7 +83,6 @@ public class FlashSaleOrderController {
      * @return HTTP 200 OK cùng trạng thái chi tiết của đơn hàng
      */
     @GetMapping("/tracking/{trackingId}")
-    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<OrderTrackingResponse>> getOrderTrackingStatus(
             @PathVariable String trackingId
     ) {
