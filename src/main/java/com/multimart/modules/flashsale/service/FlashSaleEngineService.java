@@ -61,28 +61,38 @@ public class FlashSaleEngineService {
         List<FlashSaleProduct> products = flashSaleProductRepository.findByEventId(eventId);
         int warmedUpCount = 0;
 
-        for (FlashSaleProduct product : products) {
-            String stockKey = "flashsale:stock:" + eventId + ":" + product.getProduct().getId();
-            // Nạp số lượng tồn kho khả dụng lên Redis
-            stringRedisTemplate.opsForValue().set(stockKey, String.valueOf(product.getAvailableStock()));
-            warmedUpCount++;
-            log.info("Warmed up flash sale stock for key {}: {} items", stockKey, product.getAvailableStock());
-        }
+        try {
+            for (FlashSaleProduct product : products) {
+                String stockKey = "flashsale:stock:" + eventId + ":" + product.getProduct().getId();
+                // Nạp số lượng tồn kho khả dụng lên Redis
+                stringRedisTemplate.opsForValue().set(stockKey, String.valueOf(product.getAvailableStock()));
+                warmedUpCount++;
+                log.info("Warmed up flash sale stock for key {}: {} items", stockKey, product.getAvailableStock());
+            }
 
-        return WarmUpEventResponse.builder()
-                .eventId(eventId)
-                .eventName(event.getName())
-                .warmedUpProductsCount(warmedUpCount)
-                .message("Đã nạp thành công dữ liệu " + warmedUpCount + " sản phẩm lên Redis Cache")
-                .build();
+            return WarmUpEventResponse.builder()
+                    .eventId(eventId)
+                    .eventName(event.getName())
+                    .warmedUpProductsCount(warmedUpCount)
+                    .message("Đã nạp thành công dữ liệu " + warmedUpCount + " sản phẩm lên Redis Cache")
+                    .build();
+        } catch (Exception e) {
+            log.warn("Redis is not available for cache warm-up: {}", e.getMessage());
+            return WarmUpEventResponse.builder()
+                    .eventId(eventId)
+                    .eventName(event.getName())
+                    .warmedUpProductsCount(0)
+                    .message("Redis chưa sẵn sàng. Hệ thống sẽ tự động dùng chế độ DB Fallback khi đặt hàng.")
+                    .build();
+        }
     }
 
     /**
      * Đặt mua sản phẩm Flash Sale với khả năng chịu tải hàng trăm nghìn RPS.
      * Quy trình xử lý:
      * 1. Kiểm tra trạng thái sự kiện còn hiệu lực.
-     * 2. Thực thi Redis Lua Script để kiểm tra giới hạn mua và trừ kho nguyên tử trong RAM.
-     * 3. Khi Redis trừ kho thành công, đồng bộ trừ kho PostgreSQL và tạo bản ghi FlashSaleOrder.
+     * 2. Thực thi Redis Lua Script để kiểm tra giới hạn mua và trừ kho nguyên tử trong RAM (nếu Redis online).
+     * 3. Fallback trừ kho PostgreSQL trực tiếp nếu Redis chưa bật.
      *
      * @param userId  Mã định danh người dùng mua hàng
      * @param request DTO chứa thông tin sự kiện, sản phẩm và số lượng mua
@@ -104,32 +114,51 @@ public class FlashSaleEngineService {
                         request.getEventId(), request.getProductId())
                 .orElseThrow(() -> new AppException(ErrorCode.FLASH_SALE_PRODUCT_NOT_FOUND));
 
-        // 3. Thực thi trừ tồn kho nguyên tử qua Redis Lua Script
-        String stockKey = "flashsale:stock:" + request.getEventId() + ":" + request.getProductId();
-        String buyersKey = "flashsale:buyers:" + request.getEventId() + ":" + request.getProductId();
+        // 3. Thực thi trừ tồn kho nguyên tử qua Redis Lua Script (nếu có Redis), fallback DB trực tiếp
+        boolean deductedInRedis = false;
+        try {
+            String stockKey = "flashsale:stock:" + request.getEventId() + ":" + request.getProductId();
+            String buyersKey = "flashsale:buyers:" + request.getEventId() + ":" + request.getProductId();
 
-        List<String> keys = List.of(stockKey, buyersKey);
-        Long luaResult = stringRedisTemplate.execute(
-                flashSaleStockDeductScript,
-                keys,
-                userId.toString(),
-                request.getQuantity().toString(),
-                flashSaleProduct.getPurchaseLimitPerUser().toString()
-        );
+            List<String> keys = List.of(stockKey, buyersKey);
+            Long luaResult = stringRedisTemplate.execute(
+                    flashSaleStockDeductScript,
+                    keys,
+                    userId.toString(),
+                    request.getQuantity().toString(),
+                    flashSaleProduct.getPurchaseLimitPerUser().toString()
+            );
 
-        if (luaResult == null || luaResult == -3L) {
-            log.warn("Flash sale product not warmed up on Redis: eventId={}, productId={}", request.getEventId(), request.getProductId());
-            throw new AppException(ErrorCode.FLASH_SALE_NOT_WARMED_UP);
+            if (luaResult == null || luaResult == -3L) {
+                log.warn("Flash sale product not warmed up on Redis: eventId={}, productId={}. Using DB fallback.", request.getEventId(), request.getProductId());
+            } else if (luaResult == -2L) {
+                log.warn("User {} exceeded purchase limit for flash sale product {}", userId, request.getProductId());
+                throw new AppException(ErrorCode.PURCHASE_LIMIT_EXCEEDED);
+            } else if (luaResult == -1L) {
+                log.warn("Flash sale product {} is out of stock in Redis", request.getProductId());
+                throw new AppException(ErrorCode.OUT_OF_STOCK);
+            } else {
+                deductedInRedis = true;
+            }
+        } catch (AppException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Redis unavailable for placeOrder, falling back to DB: {}", e.getMessage());
         }
 
-        if (luaResult == -2L) {
-            log.warn("User {} exceeded purchase limit for flash sale product {}", userId, request.getProductId());
-            throw new AppException(ErrorCode.PURCHASE_LIMIT_EXCEEDED);
-        }
-
-        if (luaResult == -1L) {
-            log.warn("Flash sale product {} is out of stock in Redis", request.getProductId());
-            throw new AppException(ErrorCode.OUT_OF_STOCK);
+        if (!deductedInRedis) {
+            List<FlashSaleOrder> userOrders = flashSaleOrderRepository.findByUserIdAndFlashSaleEventIdAndFlashSaleProductId(
+                    userId, request.getEventId(), flashSaleProduct.getId());
+            int alreadyBought = userOrders.stream()
+                    .filter(o -> o.getStatus() != FlashSaleOrderStatus.CANCELLED)
+                    .mapToInt(FlashSaleOrder::getQuantity)
+                    .sum();
+            if (alreadyBought + request.getQuantity() > flashSaleProduct.getPurchaseLimitPerUser()) {
+                throw new AppException(ErrorCode.PURCHASE_LIMIT_EXCEEDED);
+            }
+            if (flashSaleProduct.getAvailableStock() < request.getQuantity()) {
+                throw new AppException(ErrorCode.OUT_OF_STOCK);
+            }
         }
 
         // 4. Trừ kho PostgreSQL và tạo đơn hàng
@@ -140,6 +169,7 @@ public class FlashSaleEngineService {
         BigDecimal totalPrice = unitPrice.multiply(BigDecimal.valueOf(request.getQuantity()));
 
         FlashSaleOrder order = FlashSaleOrder.builder()
+                .orderTrackingId(java.util.UUID.randomUUID().toString())
                 .userId(userId)
                 .flashSaleEventId(request.getEventId())
                 .flashSaleProductId(flashSaleProduct.getId())
@@ -150,8 +180,8 @@ public class FlashSaleEngineService {
                 .build();
 
         FlashSaleOrder savedOrder = flashSaleOrderRepository.save(order);
-        log.info("Flash sale order created successfully: orderId={}, userId={}, remainingStockInRedis={}",
-                savedOrder.getId(), userId, luaResult);
+        log.info("Flash sale order created successfully: orderId={}, userId={}",
+                savedOrder.getId(), userId);
 
         return mapToOrderResponse(savedOrder, request.getProductId());
     }
@@ -182,60 +212,96 @@ public class FlashSaleEngineService {
                         request.getEventId(), request.getProductId())
                 .orElseThrow(() -> new AppException(ErrorCode.FLASH_SALE_PRODUCT_NOT_FOUND));
 
-        // 3. Thực thi trừ tồn kho nguyên tử qua Redis Lua Script
-        String stockKey = "flashsale:stock:" + request.getEventId() + ":" + request.getProductId();
-        String buyersKey = "flashsale:buyers:" + request.getEventId() + ":" + request.getProductId();
-
-        List<String> keys = List.of(stockKey, buyersKey);
-        Long luaResult = stringRedisTemplate.execute(
-                flashSaleStockDeductScript,
-                keys,
-                userId.toString(),
-                request.getQuantity().toString(),
-                flashSaleProduct.getPurchaseLimitPerUser().toString()
-        );
-
-        if (luaResult == null || luaResult == -3L) {
-            log.warn("Flash sale product not warmed up on Redis: eventId={}, productId={}", request.getEventId(), request.getProductId());
-            throw new AppException(ErrorCode.FLASH_SALE_NOT_WARMED_UP);
-        }
-
-        if (luaResult == -2L) {
-            log.warn("User {} exceeded purchase limit for flash sale product {}", userId, request.getProductId());
-            throw new AppException(ErrorCode.PURCHASE_LIMIT_EXCEEDED);
-        }
-
-        if (luaResult == -1L) {
-            log.warn("Flash sale product {} is out of stock in Redis", request.getProductId());
-            throw new AppException(ErrorCode.OUT_OF_STOCK);
-        }
-
-        // 4. Sinh mã tracking và gửi tin nhắn vào RabbitMQ
+        // 3. Thực thi trừ tồn kho nguyên tử qua Redis Lua Script (nếu có Redis), ngược lại Fallback DB
         String orderTrackingId = java.util.UUID.randomUUID().toString();
         BigDecimal unitPrice = flashSaleProduct.getFlashPrice();
         BigDecimal totalPrice = unitPrice.multiply(BigDecimal.valueOf(request.getQuantity()));
 
-        FlashSaleOrderMessage orderMessage = FlashSaleOrderMessage.builder()
-                .orderTrackingId(orderTrackingId)
-                .userId(userId)
-                .eventId(request.getEventId())
-                .productId(request.getProductId())
-                .flashSaleProductId(flashSaleProduct.getId())
-                .quantity(request.getQuantity())
-                .unitPrice(unitPrice)
-                .totalPrice(totalPrice)
-                .createdAt(LocalDateTime.now())
-                .build();
+        boolean processedViaRedis = false;
+        try {
+            String stockKey = "flashsale:stock:" + request.getEventId() + ":" + request.getProductId();
+            String buyersKey = "flashsale:buyers:" + request.getEventId() + ":" + request.getProductId();
 
-        // Ghi nhận trạng thái PENDING_PROCESSING trên Redis
-        String trackingKey = "flashsale:order:tracking:" + orderTrackingId;
-        stringRedisTemplate.opsForValue().set(trackingKey, "PENDING_PROCESSING", 24, java.util.concurrent.TimeUnit.HOURS);
+            List<String> keys = List.of(stockKey, buyersKey);
+            Long luaResult = stringRedisTemplate.execute(
+                    flashSaleStockDeductScript,
+                    keys,
+                    userId.toString(),
+                    request.getQuantity().toString(),
+                    flashSaleProduct.getPurchaseLimitPerUser().toString()
+            );
 
-        // Đẩy vào hàng đợi RabbitMQ
-        flashSaleOrderProducer.sendOrderMessage(orderMessage);
+            if (luaResult == null || luaResult == -3L) {
+                log.warn("Flash sale product not warmed up on Redis: eventId={}, productId={}. Falling back to DB.",
+                        request.getEventId(), request.getProductId());
+            } else if (luaResult == -2L) {
+                log.warn("User {} exceeded purchase limit for flash sale product {}", userId, request.getProductId());
+                throw new AppException(ErrorCode.PURCHASE_LIMIT_EXCEEDED);
+            } else if (luaResult == -1L) {
+                log.warn("Flash sale product {} is out of stock in Redis", request.getProductId());
+                throw new AppException(ErrorCode.OUT_OF_STOCK);
+            } else {
+                // Redis Lua Script OK -> Gửi RabbitMQ
+                FlashSaleOrderMessage orderMessage = FlashSaleOrderMessage.builder()
+                        .orderTrackingId(orderTrackingId)
+                        .userId(userId)
+                        .eventId(request.getEventId())
+                        .productId(request.getProductId())
+                        .flashSaleProductId(flashSaleProduct.getId())
+                        .quantity(request.getQuantity())
+                        .unitPrice(unitPrice)
+                        .totalPrice(totalPrice)
+                        .createdAt(LocalDateTime.now())
+                        .build();
 
-        log.info("Flash sale order request accepted asynchronously: trackingId={}, userId={}, remainingStockInRedis={}",
-                orderTrackingId, userId, luaResult);
+                String trackingKey = "flashsale:order:tracking:" + orderTrackingId;
+                stringRedisTemplate.opsForValue().set(trackingKey, "PENDING_PROCESSING", 24, java.util.concurrent.TimeUnit.HOURS);
+                flashSaleOrderProducer.sendOrderMessage(orderMessage);
+                processedViaRedis = true;
+                log.info("Flash sale order accepted asynchronously via Redis+RabbitMQ: trackingId={}, userId={}", orderTrackingId, userId);
+            }
+        } catch (AppException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Redis/RabbitMQ unavailable ({}), falling back to direct DB order placement: {}", e.getClass().getSimpleName(), e.getMessage());
+        }
+
+        if (!processedViaRedis) {
+            // Fallback DB: Kiểm tra hạn mức mua trên DB
+            List<FlashSaleOrder> userOrders = flashSaleOrderRepository.findByUserIdAndFlashSaleEventIdAndFlashSaleProductId(
+                    userId, request.getEventId(), flashSaleProduct.getId());
+            int alreadyBought = userOrders.stream()
+                    .filter(o -> o.getStatus() != FlashSaleOrderStatus.CANCELLED)
+                    .mapToInt(FlashSaleOrder::getQuantity)
+                    .sum();
+            if (alreadyBought + request.getQuantity() > flashSaleProduct.getPurchaseLimitPerUser()) {
+                throw new AppException(ErrorCode.PURCHASE_LIMIT_EXCEEDED);
+            }
+
+            // Kiểm tra tồn kho khả dụng trên DB
+            if (flashSaleProduct.getAvailableStock() < request.getQuantity()) {
+                throw new AppException(ErrorCode.OUT_OF_STOCK);
+            }
+
+            // Trừ kho và lưu đơn hàng trực tiếp
+            flashSaleProduct.setAvailableStock(flashSaleProduct.getAvailableStock() - request.getQuantity());
+            flashSaleProductRepository.save(flashSaleProduct);
+
+            FlashSaleOrder order = FlashSaleOrder.builder()
+                    .orderTrackingId(orderTrackingId)
+                    .userId(userId)
+                    .flashSaleEventId(request.getEventId())
+                    .flashSaleProductId(flashSaleProduct.getId())
+                    .quantity(request.getQuantity())
+                    .unitPrice(unitPrice)
+                    .totalPrice(totalPrice)
+                    .status(FlashSaleOrderStatus.PENDING)
+                    .build();
+
+            flashSaleOrderRepository.save(order);
+            log.info("Flash sale order placed directly in DB fallback: trackingId={}, orderId={}, userId={}",
+                    orderTrackingId, order.getId(), userId);
+        }
 
         return AsyncOrderSubmitResponse.builder()
                 .orderTrackingId(orderTrackingId)
@@ -277,14 +343,18 @@ public class FlashSaleEngineService {
                     .build();
         }
 
-        // Nếu chưa có trong DB, kiểm tra cache Redis
-        String trackingKey = "flashsale:order:tracking:" + orderTrackingId;
-        String redisStatus = stringRedisTemplate.opsForValue().get(trackingKey);
-        if (redisStatus != null && redisStatus.startsWith("PENDING_PROCESSING")) {
-            return OrderTrackingResponse.builder()
-                    .orderTrackingId(orderTrackingId)
-                    .trackingStatus("PENDING_PROCESSING")
-                    .build();
+        // Nếu chưa có trong DB, kiểm tra cache Redis (nếu Redis online)
+        try {
+            String trackingKey = "flashsale:order:tracking:" + orderTrackingId;
+            String redisStatus = stringRedisTemplate.opsForValue().get(trackingKey);
+            if (redisStatus != null && redisStatus.startsWith("PENDING_PROCESSING")) {
+                return OrderTrackingResponse.builder()
+                        .orderTrackingId(orderTrackingId)
+                        .trackingStatus("PENDING_PROCESSING")
+                        .build();
+            }
+        } catch (Exception e) {
+            log.warn("Redis check failed in getTrackingStatus: {}", e.getMessage());
         }
 
         throw new AppException(ErrorCode.RESOURCE_NOT_FOUND, "Không tìm thấy thông tin đơn hàng với mã theo dõi: " + orderTrackingId);
@@ -331,11 +401,21 @@ public class FlashSaleEngineService {
      * @return DTO FlashSaleOrderResponse
      */
     private FlashSaleOrderResponse mapToOrderResponse(FlashSaleOrder order, Long productId) {
+        String productName = null;
+        if (order.getFlashSaleProductId() != null) {
+            FlashSaleProduct fsp = flashSaleProductRepository.findById(order.getFlashSaleProductId()).orElse(null);
+            if (fsp != null && fsp.getProduct() != null) {
+                productName = fsp.getProduct().getName();
+                if (productId == null) productId = fsp.getProduct().getId();
+            }
+        }
+
         return FlashSaleOrderResponse.builder()
                 .orderId(order.getId())
                 .userId(order.getUserId())
                 .eventId(order.getFlashSaleEventId())
                 .productId(productId)
+                .productName(productName)
                 .quantity(order.getQuantity())
                 .unitPrice(order.getUnitPrice())
                 .totalPrice(order.getTotalPrice())
@@ -375,9 +455,13 @@ public class FlashSaleEngineService {
         order.setStatus(FlashSaleOrderStatus.CONFIRMED);
         FlashSaleOrder updatedOrder = flashSaleOrderRepository.save(order);
 
-        // Cập nhật cache trạng thái trên Redis
-        String trackingKey = "flashsale:order:tracking:" + order.getOrderTrackingId();
-        stringRedisTemplate.opsForValue().set(trackingKey, "CONFIRMED:" + order.getId(), 24, java.util.concurrent.TimeUnit.HOURS);
+        // Cập nhật cache trạng thái trên Redis (nếu Redis online)
+        try {
+            String trackingKey = "flashsale:order:tracking:" + order.getOrderTrackingId();
+            stringRedisTemplate.opsForValue().set(trackingKey, "CONFIRMED:" + order.getId(), 24, java.util.concurrent.TimeUnit.HOURS);
+        } catch (Exception e) {
+            log.warn("Redis update tracking on confirmPayment failed: {}", e.getMessage());
+        }
 
         log.info("Flash sale order payment confirmed successfully: orderId={}, userId={}", orderId, userId);
 
@@ -424,24 +508,28 @@ public class FlashSaleEngineService {
             log.info("Restored DB available stock for flashSaleProductId {}: +{}", fsp.getId(), message.getQuantity());
         });
 
-        // 3. Hoàn trả tồn kho và hạn mức mua trên Redis qua Lua script
-        String stockKey = "flashsale:stock:" + message.getEventId() + ":" + message.getProductId();
-        String buyersKey = "flashsale:buyers:" + message.getEventId() + ":" + message.getProductId();
-        List<String> keys = List.of(stockKey, buyersKey);
+        // 3. Hoàn trả tồn kho và hạn mức mua trên Redis qua Lua script (nếu Redis online)
+        try {
+            String stockKey = "flashsale:stock:" + message.getEventId() + ":" + message.getProductId();
+            String buyersKey = "flashsale:buyers:" + message.getEventId() + ":" + message.getProductId();
+            List<String> keys = List.of(stockKey, buyersKey);
 
-        Long updatedStock = stringRedisTemplate.execute(
-                flashSaleStockRollbackScript,
-                keys,
-                message.getUserId().toString(),
-                message.getQuantity().toString()
-        );
+            Long updatedStock = stringRedisTemplate.execute(
+                    flashSaleStockRollbackScript,
+                    keys,
+                    message.getUserId().toString(),
+                    message.getQuantity().toString()
+            );
 
-        // 4. Cập nhật cache trạng thái đơn hàng trên Redis
-        String trackingKey = "flashsale:order:tracking:" + message.getOrderTrackingId();
-        stringRedisTemplate.opsForValue().set(trackingKey, "CANCELLED_TIMEOUT", 24, java.util.concurrent.TimeUnit.HOURS);
+            // 4. Cập nhật cache trạng thái đơn hàng trên Redis
+            String trackingKey = "flashsale:order:tracking:" + message.getOrderTrackingId();
+            stringRedisTemplate.opsForValue().set(trackingKey, "CANCELLED_TIMEOUT", 24, java.util.concurrent.TimeUnit.HOURS);
 
-        log.info("Successfully cancelled expired flash sale order: orderId={}, trackingId={}, remainingStockInRedis={}",
-                order.getId(), message.getOrderTrackingId(), updatedStock);
+            log.info("Successfully cancelled expired flash sale order: orderId={}, trackingId={}, remainingStockInRedis={}",
+                    order.getId(), message.getOrderTrackingId(), updatedStock);
+        } catch (Exception e) {
+            log.warn("Redis rollback failed for expired order {}: {}", order.getId(), e.getMessage());
+        }
 
         return true;
     }

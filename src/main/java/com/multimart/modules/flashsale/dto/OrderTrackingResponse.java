@@ -28,6 +28,10 @@ public class OrderTrackingResponse {
      */
     private String trackingStatus;
 
+    public String getStatus() {
+        return trackingStatus;
+    }
+
     /**
      * ID đơn hàng trong cơ sở dữ liệu (khi trackingStatus = SUCCESS).
      */

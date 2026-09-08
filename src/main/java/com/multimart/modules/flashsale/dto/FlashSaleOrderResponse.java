@@ -59,7 +59,16 @@ public class FlashSaleOrderResponse {
     private FlashSaleOrderStatus status;
 
     /**
+     * Tên sản phẩm đặt mua.
+     */
+    private String productName;
+
+    /**
      * Thời điểm tạo đơn hàng.
      */
     private LocalDateTime createdAt;
+
+    public Long getId() {
+        return orderId;
+    }
 }
