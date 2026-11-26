@@ -93,4 +93,18 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, Long> {
      * @return danh sách đơn
      */
     List<CustomerOrder> findTop100ByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(OrderStatus status, LocalDateTime before);
+
+    /**
+     * Kiểm tra đơn hàng thuộc người dùng, đã giao ({@code DELIVERED}) và có chứa sản phẩm.
+     *
+     * @param orderId   id đơn hàng
+     * @param userId    id người dùng sở hữu đơn
+     * @param productId id sản phẩm
+     * @return {@code true} nếu đủ điều kiện đánh giá
+     */
+    @Query("select count(o) > 0 from CustomerOrder o join o.items i "
+            + "where o.id = :orderId and o.userId = :userId and o.deleted = false "
+            + "and o.status = com.multimart.modules.order.entity.OrderStatus.DELIVERED and i.productId = :productId")
+    boolean existsDeliveredOrderWithProduct(@Param("orderId") Long orderId, @Param("userId") Long userId,
+                                            @Param("productId") Long productId);
 }

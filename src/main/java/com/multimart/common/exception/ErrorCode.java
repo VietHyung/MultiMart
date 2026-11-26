@@ -49,7 +49,13 @@ public enum ErrorCode {
     CATEGORY_NOT_FOUND(5001, "Danh mục không tồn tại", HttpStatus.NOT_FOUND),
     CATEGORY_NAME_DUPLICATED(5002, "Tên danh mục đã tồn tại trong cùng danh mục cha", HttpStatus.CONFLICT),
     CATEGORY_NOT_EMPTY(5003, "Danh mục còn danh mục con hoặc còn sản phẩm nên không thể xóa", HttpStatus.BAD_REQUEST),
-    CATEGORY_DEPTH_EXCEEDED(5004, "Danh mục chỉ được phép có tối đa 2 cấp", HttpStatus.BAD_REQUEST);
+    CATEGORY_DEPTH_EXCEEDED(5004, "Danh mục chỉ được phép có tối đa 2 cấp", HttpStatus.BAD_REQUEST),
+
+    // 6xxx: Đánh giá sản phẩm (Review)
+    REVIEW_NOT_FOUND(6001, "Đánh giá không tồn tại", HttpStatus.NOT_FOUND),
+    REVIEW_ALREADY_EXISTS(6002, "Bạn đã đánh giá sản phẩm này trong đơn hàng này", HttpStatus.CONFLICT),
+    REVIEW_NOT_ELIGIBLE(6003, "Chỉ được đánh giá sản phẩm thuộc đơn hàng của bạn đã được giao", HttpStatus.FORBIDDEN),
+    REVIEW_ACCESS_DENIED(6004, "Bạn không có quyền thao tác trên đánh giá này", HttpStatus.FORBIDDEN);
 
     private final int code;
     private final String message;

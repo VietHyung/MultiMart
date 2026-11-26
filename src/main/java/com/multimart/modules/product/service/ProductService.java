@@ -10,6 +10,7 @@ import com.multimart.modules.category.repository.CategoryRepository;
 import com.multimart.modules.category.service.CategoryService;
 import com.multimart.modules.product.dto.CreateProductRequest;
 import com.multimart.modules.product.dto.ProductResponse;
+import com.multimart.modules.review.service.RatingCalculator;
 import com.multimart.modules.product.dto.ProductSearchCriteria;
 import com.multimart.modules.product.dto.UpdateProductRequest;
 import com.multimart.modules.product.entity.Product;
@@ -234,6 +235,10 @@ public class ProductService {
                 .status(product.getStatus())
                 .categoryId(product.getCategoryId())
                 .categoryName(categoryName)
+                .ratingAverage(RatingCalculator.average(
+                        product.getRatingSum() == null ? 0 : product.getRatingSum(),
+                        product.getRatingCount() == null ? 0 : product.getRatingCount()))
+                .ratingCount(product.getRatingCount() == null ? 0 : product.getRatingCount())
                 .createdAt(product.getCreatedAt())
                 .updatedAt(product.getUpdatedAt())
                 .build();

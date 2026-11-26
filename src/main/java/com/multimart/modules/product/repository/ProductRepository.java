@@ -108,4 +108,17 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     @Modifying
     @Query("update Product p set p.totalStock = p.totalStock + :qty where p.id = :id")
     int restoreStock(@Param("id") Long id, @Param("qty") int qty);
+
+    /**
+     * Điều chỉnh tổng hợp điểm đánh giá nguyên tử (không đọc-sửa-ghi trong Java).
+     *
+     * @param id         id sản phẩm
+     * @param countDelta thay đổi số lượng đánh giá (+1, 0, -1)
+     * @param sumDelta   thay đổi tổng số sao
+     * @return số dòng bị ảnh hưởng
+     */
+    @Modifying
+    @Query(value = "update products set rating_count = rating_count + :countDelta, "
+            + "rating_sum = rating_sum + :sumDelta where id = :id", nativeQuery = true)
+    int adjustRating(@Param("id") Long id, @Param("countDelta") int countDelta, @Param("sumDelta") int sumDelta);
 }

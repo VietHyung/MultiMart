@@ -40,4 +40,17 @@ public class Product extends BaseEntity {
     /** Id danh mục chứa sản phẩm (tùy chọn, null nếu chưa phân loại). */
     @Column(name = "category_id")
     private Long categoryId;
+
+    /**
+     * Số đánh giá đang hiển thị. Chỉ đọc: được cập nhật bằng truy vấn nguyên tử để không bị ghi đè
+     * bởi giá trị cũ khi sửa thông tin sản phẩm.
+     */
+    @Builder.Default
+    @Column(name = "rating_count", nullable = false, insertable = false, updatable = false)
+    private Integer ratingCount = 0;
+
+    /** Tổng số sao của các đánh giá đang hiển thị (chỉ đọc, xem {@link #ratingCount}). */
+    @Builder.Default
+    @Column(name = "rating_sum", nullable = false, insertable = false, updatable = false)
+    private Integer ratingSum = 0;
 }
