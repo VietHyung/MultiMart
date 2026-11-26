@@ -185,7 +185,7 @@ Tái sử dụng: `ORDER_ALREADY_PAID` (3011), `ORDER_ALREADY_CANCELLED` (3010),
 
 ## Kết quả triển khai & kiểm thử (Dev/Test)
 
-**Trạng thái Gate 2:** chưa chạy `mvnw test` trên môi trường cloud (không có Maven/Postgres/Redis). Cần chạy cục bộ: `.\mvnw.cmd test`.
+**Trạng thái Gate 2:** đã chạy `mvnw test` trên Postgres 16 + Redis trống (không có RabbitMQ): 100 test, 99 pass. Migration Flyway V1–V3 chạy thành công trên DB trống. 1 test lỗi có sẵn từ trước, không do nhánh này: `FlashSaleEngineServiceTest.placeOrder_NotWarmedUp` (NPE `savedOrder` ở `FlashSaleEngineService.placeOrder`, file không bị sửa). Chưa kiểm tra trên DB có dữ liệu cũ (baseline).
 
 **Test đã viết:** `CartServiceTest` (T01–T07, T27), `OrderServiceTest` (T09–T14, T16–T23).
 Các case đồng thời (T15, T24–T26, T28–T30) cần kiểm thử tích hợp với DB/Redis thật, chưa có.

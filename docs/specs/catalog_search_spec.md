@@ -123,7 +123,7 @@ Response `PageResponse<ProductResponse>` – mỗi phần tử thêm `categoryId
 
 ## Kết quả triển khai & kiểm thử (Dev/Test)
 
-**Trạng thái Gate 2:** chưa chạy `mvnw test` trên cloud; cần chạy cục bộ.
+**Trạng thái Gate 2:** đã chạy `mvnw test`: 99/100 pass; 1 lỗi có sẵn ở `FlashSaleEngineServiceTest.placeOrder_NotWarmedUp`, không thuộc phạm vi nhánh này. Chưa kiểm tra trên DB có dữ liệu cũ.
 
 **Test đã viết:** `ProductSearchCriteriaTest` (K11–K16, K19), `CategoryServiceTest` (K01–K07).
 Chưa có test tích hợp cho truy vấn tìm kiếm thật (pg_trgm, lọc giá, inStock) và cache (K08–K10, K17–K18, K20–K25).
