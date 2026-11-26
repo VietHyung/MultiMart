@@ -103,9 +103,12 @@ public class FlashSaleService {
                             product.getTotalStock(), request.getTotalAllocated()));
         }
 
-        // Giam kho (Inventory Pre-allocation): Trừ kho gốc để chuyển sang kho Flash-Sale
-        product.setTotalStock(product.getTotalStock() - request.getTotalAllocated());
-        productRepository.save(product);
+        // Giam kho (Inventory Pre-allocation): Trừ kho gốc để chuyển sang kho Flash-Sale.
+        // Dùng UPDATE có điều kiện nguyên tử (không đọc-sửa-ghi) để không race với đặt hàng thường (SA ADR-2).
+        if (productRepository.reserveStock(product.getId(), request.getTotalAllocated()) == 0) {
+            throw new AppException(ErrorCode.OUT_OF_STOCK,
+                    "Kho sản phẩm gốc không đủ số lượng để trích cho Flash-Sale");
+        }
 
         FlashSaleProduct flashSaleProduct = FlashSaleProduct.builder()
                 .event(event)

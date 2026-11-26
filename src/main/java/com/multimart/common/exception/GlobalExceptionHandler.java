@@ -70,6 +70,36 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Xử lý tham số query/path sai kiểu (ví dụ status=ABC không thuộc enum) thành lỗi 400 thay vì 500.
+     *
+     * @param ex ngoại lệ sai kiểu tham số
+     * @return ResponseEntity 400 Bad Request
+     */
+    @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
+        log.warn("Argument type mismatch: name={}, value={}", ex.getName(), ex.getValue());
+        ApiResponse<Void> response = ApiResponse.error(
+                ErrorCode.INVALID_REQUEST.getCode(), "Giá trị không hợp lệ cho tham số: " + ex.getName());
+        return ResponseEntity.status(ErrorCode.INVALID_REQUEST.getHttpStatus()).body(response);
+    }
+
+    /**
+     * Xử lý body JSON sai định dạng hoặc giá trị enum không hợp lệ thành lỗi 400 thay vì 500.
+     *
+     * @param ex ngoại lệ không đọc được body
+     * @return ResponseEntity 400 Bad Request
+     */
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(
+            org.springframework.http.converter.HttpMessageNotReadableException ex) {
+        log.warn("Unreadable request body: {}", ex.getMessage());
+        ApiResponse<Void> response = ApiResponse.error(
+                ErrorCode.INVALID_REQUEST.getCode(), "Dữ liệu gửi lên không đúng định dạng");
+        return ResponseEntity.status(ErrorCode.INVALID_REQUEST.getHttpStatus()).body(response);
+    }
+
+    /**
      * Bắt các ngoại lệ vi phạm quyền truy cập từ Spring Security (@PreAuthorize).
      *
      * @param ex ngoại lệ AccessDeniedException khi người dùng không đủ quyền hạn (Role)
