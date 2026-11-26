@@ -133,3 +133,20 @@ Dùng lại: `PRODUCT_NOT_FOUND`, `PRODUCT_NOT_AVAILABLE`, `INVALID_REQUEST` (ra
 3. Sửa đánh giá không giới hạn thời gian.
 4. Admin chỉ ẩn/hiện, không xóa.
 5. Ảnh trong đánh giá: không làm ở phiên bản này.
+
+---
+
+## 11. KẾT QUẢ TRIỂN KHAI & KIỂM THỬ (Dev/Test)
+
+**Gate 2:** đã chạy `mvnw test` trên Postgres 16 + Redis thật (không có RabbitMQ): 132 test, 131 pass. Lỗi duy nhất là `FlashSaleEngineServiceTest.placeOrder_NotWarmedUp` (NPE trong `FlashSaleEngineService`, có từ trước, không thuộc nhánh này). Migration V4 chạy thành công trên DB đã có V1–V3.
+
+**Test đã viết:**
+- `RatingCalculatorTest`, `ReviewServiceTest` (Mockito, 29 test): R01–R05, R06 (ánh xạ lỗi UNIQUE), R08, R09, R11–R15, R17–R26.
+- `ReviewIntegrationTest` (MockMvc + DB/Redis thật, 3 test): luồng đầy đủ gửi → trùng → quyền → sửa → ẩn/hiện → xóa → gửi lại; kiểm tra tổng hợp và cache chi tiết sản phẩm được cập nhật ngay; danh sách/validation (R07, R23); 4 request đồng thời cùng đơn+sản phẩm cho đúng 1 thành công (R06).
+
+**Chưa kiểm thử:** R10 chỉ kiểm tra 401 cho thao tác gửi (chưa cho sửa/xóa qua HTTP); R22 (thứ tự sắp xếp thực tế theo `ratingDesc`/`ratingAsc` với nhiều đánh giá); R28 mới kiểm tra User bị 403 ở danh sách kiểm duyệt (chưa kiểm tra lọc `status` của Admin); chưa thử trên DB có dữ liệu cũ của môi trường dev.
+
+**Chi tiết triển khai bổ sung so với thiết kế:**
+- Cột `rating_count`/`rating_sum` trong entity `Product` được ánh xạ chỉ đọc (`insertable=false, updatable=false`) để việc sửa thông tin sản phẩm không ghi đè tổng hợp bằng giá trị cũ; chỉ cập nhật bằng câu UPDATE nguyên tử.
+- Các thao tác sửa/xóa/ẩn hiện tải đánh giá bằng khóa dòng (`PESSIMISTIC_WRITE`) để tính đúng tổng hợp khi thao tác đồng thời.
+- Nhận xét dài quá 1000 ký tự bị chặn hai lớp: Bean Validation ở controller và kiểm tra lại trong service.
