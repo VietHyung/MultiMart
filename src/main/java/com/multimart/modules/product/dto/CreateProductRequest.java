@@ -29,4 +29,7 @@ public class CreateProductRequest {
     @NotNull(message = "Số lượng tồn kho không được để trống")
     @Min(value = 0, message = "Số lượng tồn kho không được âm")
     private Integer totalStock;
+
+    /** Id danh mục (tùy chọn). Với cập nhật: null nghĩa là bỏ phân loại danh mục. */
+    private Long categoryId;
 }

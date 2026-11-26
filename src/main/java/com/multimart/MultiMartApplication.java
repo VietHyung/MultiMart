@@ -2,11 +2,13 @@ package com.multimart;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Lớp khởi động chính của ứng dụng MultiMart E-Commerce & Flash-Sale Platform.
  */
 @SpringBootApplication
+@EnableScheduling
 public class MultiMartApplication {
 
     /**

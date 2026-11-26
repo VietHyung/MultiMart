@@ -31,4 +31,7 @@ public class UpdateProductRequest {
     private Integer totalStock;
 
     private String status; // ACTIVE, INACTIVE
+
+    /** Id danh mục (tùy chọn). Với cập nhật: null nghĩa là bỏ phân loại danh mục. */
+    private Long categoryId;
 }

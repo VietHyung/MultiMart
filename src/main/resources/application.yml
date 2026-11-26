@@ -11,9 +11,15 @@ spring:
     username: postgres
     password: 123
 
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 1
+
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: none
     show-sql: true
     properties:
       hibernate:
@@ -54,3 +60,7 @@ flashsale:
   order:
     timeout-ms: 900000 # 15 phút
 
+order:
+  payment-timeout-ms: 1800000 # 30 phút
+  expiration-scheduler:
+    enabled: true

@@ -36,4 +36,8 @@ public class Product extends BaseEntity {
     @Builder.Default
     @Column(nullable = false, length = 30)
     private String status = "ACTIVE"; // ACTIVE, INACTIVE
+
+    /** Id danh mục chứa sản phẩm (tùy chọn, null nếu chưa phân loại). */
+    @Column(name = "category_id")
+    private Long categoryId;
 }

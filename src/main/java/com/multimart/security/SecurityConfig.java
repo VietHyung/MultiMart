@@ -90,6 +90,8 @@ public class SecurityConfig {
                         ).permitAll()
                         // Cho phép xem danh sách và chi tiết sản phẩm công khai
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/products/**").permitAll()
+                        // Cho phép xem cây danh mục sản phẩm công khai
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/categories/**").permitAll()
                         // Cho phép xem các đợt Flash-Sale công khai
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/v1/flash-sales/**").permitAll()
                         // Các endpoint còn lại bắt buộc phải có JWT

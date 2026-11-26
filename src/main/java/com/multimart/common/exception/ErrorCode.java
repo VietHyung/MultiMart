@@ -30,7 +30,26 @@ public enum ErrorCode {
     FLASH_SALE_PRODUCT_NOT_FOUND(3009, "Sản phẩm Flash Sale không tồn tại trong sự kiện này", HttpStatus.NOT_FOUND),
     ORDER_ALREADY_CANCELLED(3010, "Đơn hàng đã hết hạn thanh toán hoặc đã bị hủy", HttpStatus.BAD_REQUEST),
     ORDER_ALREADY_PAID(3011, "Đơn hàng đã được thanh toán trước đó", HttpStatus.BAD_REQUEST),
-    ORDER_ACCESS_DENIED(3012, "Bạn không có quyền thao tác trên đơn hàng này", HttpStatus.FORBIDDEN);
+    ORDER_ACCESS_DENIED(3012, "Bạn không có quyền thao tác trên đơn hàng này", HttpStatus.FORBIDDEN),
+
+    // 4xxx: Giỏ hàng & Đơn hàng thường (Cart & Standard Order)
+    CART_ITEM_LIMIT_EXCEEDED(4001, "Giỏ hàng chỉ chứa tối đa 50 sản phẩm khác nhau", HttpStatus.BAD_REQUEST),
+    CART_EMPTY(4002, "Giỏ hàng trống hoặc không có sản phẩm nào được chọn để đặt hàng", HttpStatus.BAD_REQUEST),
+    PRODUCT_NOT_AVAILABLE(4003, "Sản phẩm hiện không còn được bán", HttpStatus.BAD_REQUEST),
+    INSUFFICIENT_STOCK(4004, "Số lượng tồn kho không đủ", HttpStatus.BAD_REQUEST),
+    STANDARD_ORDER_NOT_FOUND(4005, "Đơn hàng không tồn tại", HttpStatus.NOT_FOUND),
+    INVALID_ORDER_STATUS_TRANSITION(4006, "Không thể chuyển đơn hàng sang trạng thái này", HttpStatus.BAD_REQUEST),
+    ORDER_CANNOT_CANCEL(4007, "Đơn hàng đã giao hoặc đang giao nên không thể hủy", HttpStatus.BAD_REQUEST),
+    ORDER_ACCESS_DENIED_STD(4008, "Bạn không có quyền thao tác trên đơn hàng này", HttpStatus.FORBIDDEN),
+    IDEMPOTENCY_KEY_REQUIRED(4009, "Thiếu header Idempotency-Key khi đặt hàng", HttpStatus.BAD_REQUEST),
+    CART_UNAVAILABLE(4010, "Dịch vụ giỏ hàng tạm thời không khả dụng, vui lòng thử lại sau", HttpStatus.SERVICE_UNAVAILABLE),
+    CONCURRENT_UPDATE(4011, "Dữ liệu vừa được cập nhật bởi thao tác khác, vui lòng thử lại", HttpStatus.CONFLICT),
+
+    // 5xxx: Danh mục sản phẩm (Catalog)
+    CATEGORY_NOT_FOUND(5001, "Danh mục không tồn tại", HttpStatus.NOT_FOUND),
+    CATEGORY_NAME_DUPLICATED(5002, "Tên danh mục đã tồn tại trong cùng danh mục cha", HttpStatus.CONFLICT),
+    CATEGORY_NOT_EMPTY(5003, "Danh mục còn danh mục con hoặc còn sản phẩm nên không thể xóa", HttpStatus.BAD_REQUEST),
+    CATEGORY_DEPTH_EXCEEDED(5004, "Danh mục chỉ được phép có tối đa 2 cấp", HttpStatus.BAD_REQUEST);
 
     private final int code;
     private final String message;

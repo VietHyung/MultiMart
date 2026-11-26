@@ -35,6 +35,41 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Xử lý lỗi thiếu tồn kho khi đặt hàng: trả kèm danh sách productId bị thiếu để Frontend hiển thị.
+     *
+     * @param ex ngoại lệ chứa danh sách id sản phẩm không đủ hàng
+     * @return ResponseEntity 400 cùng data.productIds
+     */
+    @ExceptionHandler(InsufficientStockException.class)
+    public ResponseEntity<ApiResponse<Map<String, Object>>> handleInsufficientStock(InsufficientStockException ex) {
+        log.warn("Insufficient stock for products: {}", ex.getProductIds());
+        ErrorCode errorCode = ex.getErrorCode();
+        Map<String, Object> data = new HashMap<>();
+        data.put("productIds", ex.getProductIds());
+        ApiResponse<Map<String, Object>> response = ApiResponse.<Map<String, Object>>builder()
+                .code(errorCode.getCode())
+                .message(ex.getMessage())
+                .data(data)
+                .build();
+        return ResponseEntity.status(errorCode.getHttpStatus()).body(response);
+    }
+
+    /**
+     * Xử lý xung đột khóa lạc quan (@Version): hai thao tác cùng cập nhật một đơn hàng.
+     *
+     * @param ex ngoại lệ xung đột phiên bản
+     * @return ResponseEntity 409 Conflict
+     */
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLock(
+            org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
+        log.warn("Optimistic locking conflict: {}", ex.getMessage());
+        ApiResponse<Void> response = ApiResponse.error(
+                ErrorCode.CONCURRENT_UPDATE.getCode(), ErrorCode.CONCURRENT_UPDATE.getMessage());
+        return ResponseEntity.status(ErrorCode.CONCURRENT_UPDATE.getHttpStatus()).body(response);
+    }
+
+    /**
      * Bắt các ngoại lệ vi phạm quyền truy cập từ Spring Security (@PreAuthorize).
      *
      * @param ex ngoại lệ AccessDeniedException khi người dùng không đủ quyền hạn (Role)

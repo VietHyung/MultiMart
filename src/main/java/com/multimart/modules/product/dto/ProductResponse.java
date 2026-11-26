@@ -18,6 +18,8 @@ public class ProductResponse {
     private BigDecimal originalPrice;
     private Integer totalStock;
     private String status;
+    private Long categoryId;
+    private String categoryName;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }
